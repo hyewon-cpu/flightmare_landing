@@ -1,6 +1,7 @@
 env:
   seed: 1
-  scene_id: 0  # 0 warehouse, 1 garage, 3 natureforest
+  scene_id: 1  # 0 industry, 1 island
   num_envs: 100
-  num_threads: 10 
+  num_threads: 10
+  spawn_spacing: 3.0 
   render: no 

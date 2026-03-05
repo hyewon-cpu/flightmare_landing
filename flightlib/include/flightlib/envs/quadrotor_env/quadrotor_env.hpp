@@ -53,6 +53,9 @@ class QuadrotorEnv final : public EnvBase {
 
   // - public set functions
   bool loadParam(const YAML::Node &cfg);
+  inline void setSpawnOffset(const Ref<Vector<3>> offset) {
+    spawn_offset_ = offset;
+  }
 
   // - public get functions
   bool getObs(Ref<Vector<>> obs) override;
@@ -91,6 +94,7 @@ class QuadrotorEnv final : public EnvBase {
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;
+  Vector<3> spawn_offset_ = Vector<3>::Zero();
 };
 
 }  // namespace flightlib

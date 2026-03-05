@@ -7,6 +7,7 @@
 // flightlib
 #include "flightlib/envs/env_base.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_vis_env.hpp"
 #include "flightlib/envs/test_env.hpp"
 #include "flightlib/envs/vec_env.hpp"
 
@@ -43,4 +44,29 @@ PYBIND11_MODULE(flightgym, m) {
     .def(py::init<>())
     .def("reset", &TestEnv<QuadrotorEnv>::reset)
     .def("__repr__", [](const TestEnv<QuadrotorEnv>& a) { return "Test Env"; });
+
+  py::class_<VecEnv<QuadrotorVisEnv>>(m, "QuadrotorVisEnv_v1")
+    .def(py::init<>())
+    .def(py::init<const std::string&>())
+    .def(py::init<const std::string&, const bool>())
+    .def("reset", &VecEnv<QuadrotorVisEnv>::reset)
+    .def("step", &VecEnv<QuadrotorVisEnv>::step)
+    .def("testStep", &VecEnv<QuadrotorVisEnv>::testStep)
+    .def("setSeed", &VecEnv<QuadrotorVisEnv>::setSeed)
+    .def("close", &VecEnv<QuadrotorVisEnv>::close)
+    .def("isTerminalState", &VecEnv<QuadrotorVisEnv>::isTerminalState)
+    .def("curriculumUpdate", &VecEnv<QuadrotorVisEnv>::curriculumUpdate)
+    .def("connectUnity", &VecEnv<QuadrotorVisEnv>::connectUnity)
+    .def("disconnectUnity", &VecEnv<QuadrotorVisEnv>::disconnectUnity)
+    .def("getNumOfEnvs", &VecEnv<QuadrotorVisEnv>::getNumOfEnvs)
+    .def("getObsDim", &VecEnv<QuadrotorVisEnv>::getObsDim)
+    .def("getActDim", &VecEnv<QuadrotorVisEnv>::getActDim)
+    .def("getExtraInfoNames", &VecEnv<QuadrotorVisEnv>::getExtraInfoNames)
+    .def("setTruncationEnabled", &VecEnv<QuadrotorVisEnv>::setTruncationEnabled,
+         "Enable or disable episode truncation (useful for testing)")
+    .def("getTruncationEnabled", &VecEnv<QuadrotorVisEnv>::getTruncationEnabled,
+         "Get whether truncation is enabled")
+    .def("__repr__", [](const VecEnv<QuadrotorVisEnv>& a) {
+      return "RPG Drone Racing Visual Environment";
+    });
 }

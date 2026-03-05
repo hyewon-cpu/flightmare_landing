@@ -16,7 +16,7 @@ setup(
     description='Flightmare: A Quadrotor Simulator.',
     long_description='',
     install_requires=['gymnasium', 'ruamel.yaml',
-                      'numpy', 'stable-baselines3'],
+                      'numpy', 'stable-baselines3', 'opencv-python'],
     packages=['tonedio_baselines'],
 )
 

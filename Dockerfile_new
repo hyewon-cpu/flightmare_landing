@@ -1,0 +1,204 @@
+FROM nvidia/cuda:12.0.1-devel-ubuntu20.04 as base
+
+FROM base as base-amd64
+
+ENV NV_CUDNN_VERSION 8.8.0.121
+ENV NV_CUDNN_PACKAGE_NAME "libcudnn8"
+
+ENV NV_CUDNN_PACKAGE "libcudnn8=$NV_CUDNN_VERSION-1+cuda12.0"
+ENV NV_CUDNN_PACKAGE_DEV "libcudnn8-dev=$NV_CUDNN_VERSION-1+cuda12.0"
+
+
+FROM base as base-arm64
+
+ENV NV_CUDNN_VERSION 8.8.0.121
+ENV NV_CUDNN_PACKAGE_NAME "libcudnn8"
+
+ENV NV_CUDNN_PACKAGE "libcudnn8=$NV_CUDNN_VERSION-1+cuda12.0"
+ENV NV_CUDNN_PACKAGE_DEV "libcudnn8-dev=$NV_CUDNN_VERSION-1+cuda12.0"
+
+FROM base-${TARGETARCH}
+
+ARG TARGETARCH
+
+LABEL maintainer "NVIDIA CORPORATION <cudatools@nvidia.com>"
+LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ${NV_CUDNN_PACKAGE} \
+    ${NV_CUDNN_PACKAGE_DEV} \
+    && apt-mark hold ${NV_CUDNN_PACKAGE_NAME} \
+    && rm -rf /var/lib/apt/lists/*
+
+##########################
+## ros noetic
+##########################
+
+# # This is an auto generated Dockerfile for ros:ros-base
+# # generated from docker_images/create_ros_image.Dockerfile.em
+# FROM ros:noetic-ros-core-focal
+
+# install bootstrap tools & rosdep & ros packages &
+RUN apt-get update \
+    && apt-get install -y lsb-release \
+    && apt-get clean all \
+    && apt-get -y install curl \
+    && sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list' \
+    && curl -s https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add - \
+    && apt-get update \
+    && echo "Etc/UTC" > /etc/timezone \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y tzdata \
+    && apt-get update && apt-get install --no-install-recommends -y \
+    build-essential \
+    python3-rosdep \
+    python3-rosinstall \
+    python3-vcstools \
+    python3-rosinstall-generator \
+    python3-wstool \
+    ros-noetic-desktop-full \
+    && rm -rf /var/lib/apt/lists/* \
+    && rosdep init \
+    && rosdep update --rosdistro noetic \
+    && apt-get update \ 
+    && apt-get install -y --no-install-recommends ros-noetic-ros-base=1.5.0-1* \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm /bin/sh && ln -s /bin/bash /bin/sh
+
+RUN source /opt/ros/noetic/setup.bash \
+    && apt-get -y update \
+    && apt-get -y install python3 python3-pip \
+    && pip install --upgrade pip \
+    && pip install "networkx<3.0" \
+    && pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.1+cu118 -f https://download.pytorch.org/whl/torch_stable.html
+
+# # install lib torch for midas
+# WORKDIR /root
+# RUN apt-get update && apt-get install --no-install-recommends -y \
+#     wget \
+#     unzip
+# RUN wget https://download.pytorch.org/libtorch/cu110/libtorch-cxx11-abi-shared-with-deps-1.7.0%2Bcu110.zip
+# RUN unzip libtorch-cxx11-abi-shared-with-deps-1.7.0+cu110.zip
+
+RUN pip install pandas \
+    requests \
+    && echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc \
+    && apt-get update \
+    && /bin/bash -c 'apt-get -y install git'
+
+##########################
+## opencv cuda
+##########################
+RUN ln -snf /usr/share/zoneinfo/Asia/Seoul /etc/localtime \
+    && apt-get -y purge libopencv* \
+    && apt-get -y purge python3-opencv && pip uninstall -y opencv-python && apt-get -y update \
+    && apt-get install -y build-essential pkg-config \
+    cmake libavcodec-dev libavformat-dev libavutil-dev \
+    libglew-dev libgtk2.0-dev libgtk-3-dev libjpeg-dev libpng-dev libpostproc-dev \
+    libswscale-dev libtbb-dev libtiff5-dev libv4l-dev libxvidcore-dev \
+    libx264-dev qt5-default zlib1g-dev libgl1 libglvnd-dev pkg-config \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev mesa-utils \
+    python3-dev python3-numpy wget unzip \
+    && mkdir /home/opencv_source_directory
+WORKDIR /home/opencv_source_directory
+RUN wget -O opencv.zip https://github.com/opencv/opencv/archive/4.9.0.zip \
+    && unzip opencv.zip
+
+RUN wget -O opencv_contrib.zip https://github.com/opencv/opencv_contrib/archive/4.9.0.zip \
+    && unzip opencv_contrib.zip \
+    && mkdir opencv-4.9.0/build
+WORKDIR /home/opencv_source_directory/opencv-4.9.0/build
+
+RUN cmake -D CMAKE_BUILD_TYPE=RELEASE \
+-D CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+-D CMAKE_C_COMPILER=gcc-9 \
+-D CMAKE_CXX_COMPILER=g++-9 \
+-D CMAKE_INSTALL_PREFIX=/usr/local \
+-D OPENCV_GENERATE_PKGCONFIG=OFF \
+-D PYTHON_EXECUTABLE=/usr/bin/python3.8 \
+-D PYTHON2_EXECUTABLE="" \
+-D BUILD_opencv_python3=ON \
+-D BUILD_opencv_python2=OFF \
+-D PYTHON3_PACKAGES_PATH=/usr/local/lib/python3.8/dist-packages \
+-D BUILD_NEW_PYTHON_SUPPORT=ON \
+-D OPENCV_SKIP_PYTHON_LOADER=ON \
+-D WITH_CUDA=ON \
+-D OPENCV_DNN_CUDA=ON \
+-D WITH_CUDNN=ON \
+-D CUDA_ARCH_BIN=8.6 \
+-D CUDA_ARCH_PTX=8.6 \
+-D ENABLE_FAST_MATH=ON \
+-D CUDA_FAST_MATH=ON \
+-D WITH_CUBLAS=ON \
+-D WITH_LIBV4L=ON \
+-D WITH_GSTREAMER=ON \
+-D WITH_GSTREAMER_0_10=OFF \
+-D WITH_CUFFT=ON \
+-D WITH_NVCUVID=ON \
+-D WITH_QT=ON \
+-D WITH_OPENGL=ON \
+-D WITH_IPP=OFF \
+-D WITH_V4L=ON \
+-D WITH_1394=OFF \
+-D WITH_GTK=ON \
+-D WITH_EIGEN=ON \
+-D WITH_FFMPEG=ON \
+-D WITH_TBB=ON \
+-D BUILD_opencv_cudacodec=OFF \
+-D CUDA_NVCC_FLAGS="--expt-relaxed-constexpr" \
+-D OPENCV_EXTRA_MODULES_PATH=../../opencv_contrib-4.9.0/modules \
+../
+
+RUN make -j8 && make install
+
+##########################
+## install cv_bridge
+##########################
+WORKDIR /home
+RUN mkdir -p /home/CV_Bridge/src
+WORKDIR /home/CV_Bridge/src
+RUN git clone https://github.com/ros-perception/vision_opencv
+WORKDIR vision_opencv
+RUN git checkout origin/noetic
+WORKDIR /home/CV_Bridge
+RUN /bin/bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -DCMAKE_POLICY_VERSION_MINIMUM=3.5' && \
+    echo "source /home/CV_Bridge/devel/setup.bash" >> ~/.bashrc
+
+##########################
+## mavros setting
+##########################
+RUN sudo apt-get update \
+    && pip install pymavlink==2.3.8 mavproxy==1.8.9 dronekit==2.9.2 \
+    && apt-get -y install ros-noetic-mavros ros-noetic-mavros-extras \
+    && wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh \
+    && chmod a+x install_geographiclib_datasets.sh \
+    && ./install_geographiclib_datasets.sh
+
+##########################
+## flightmare setting
+##########################
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    libzmqpp-dev \
+    libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV FLIGHTMARE_PATH=/home/flightmare
+
+RUN echo "export FLIGHTMARE_PATH=/home/flightmare" >> ~/.bashrc \
+    && pip install scikit-build tqdm wandb tensorboard rich
+
+##########################
+## Copy and Build Flightmare
+##########################
+
+WORKDIR /home
+COPY . /home/flightmare
+WORKDIR /home/flightmare/flightlib
+RUN pip install .
+WORKDIR /home/flightmare/tonediorl
+RUN pip install -e .
+
+

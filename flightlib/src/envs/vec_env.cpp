@@ -1,4 +1,6 @@
 #include "flightlib/envs/vec_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_vis_env.hpp"
+#include <cmath>
 
 namespace flightlib {
 
@@ -43,6 +45,26 @@ void VecEnv<EnvBase>::init(void) {
   for (int i = 0; i < num_envs_; i++) {
     envs_.push_back(std::make_unique<EnvBase>());
   }
+
+  // optional spawn spacing for multi-agent visualization/training.
+  // Each environment gets a deterministic XY offset on a square grid.
+  Scalar spawn_spacing = 0.0;
+  if (cfg_["env"]["spawn_spacing"]) {
+    spawn_spacing = cfg_["env"]["spawn_spacing"].as<Scalar>();
+  }
+  if (spawn_spacing > 0.0) {
+    const int grid_cols = static_cast<int>(std::ceil(std::sqrt(num_envs_)));
+    const Scalar center = (static_cast<Scalar>(grid_cols) - 1.0) * 0.5;
+    for (int i = 0; i < num_envs_; i++) {
+      const int row = i / grid_cols;
+      const int col = i % grid_cols;
+      Vector<3> spawn_offset;
+      spawn_offset << (static_cast<Scalar>(col) - center) * spawn_spacing,
+        (static_cast<Scalar>(row) - center) * spawn_spacing, 0.0;
+      envs_[i]->setSpawnOffset(spawn_offset);
+    }
+  }
+
 
   // initialize episode step counters for truncation
   episode_steps_.resize(num_envs_, 0); // hj added  
@@ -263,5 +285,6 @@ bool VecEnv<EnvBase>::getTruncationEnabled(void) const { // hj added
 // IMPORTANT. Otherwise:
 // Segmentation fault (core dumped)
 template class VecEnv<QuadrotorEnv>;
+template class VecEnv<QuadrotorVisEnv>;
 
 }  // namespace flightlib
