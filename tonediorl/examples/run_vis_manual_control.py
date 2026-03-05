@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument("--num_envs", type=int, default=1)
     parser.add_argument("--num_threads", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--control_step", type=float, default=0.05)
+    parser.add_argument("--up_action", type=float, default=0.0, help="Normalized upward action amplitude in [-1, 1]")
     parser.add_argument("--max_steps", type=int, default=0, help="0 means infinite")
     parser.add_argument("--show_image", type=int, default=1, help="1: cv2 window")
     parser.add_argument("--display_scale", type=int, default=4, help="Display magnification for the 84x84 image")
@@ -49,56 +49,19 @@ def clip_action(action):
     return np.clip(action, -1.0, 1.0)
 
 
+def get_control_mode() -> str:
+    yaml = YAML()
+    cfg_path = os.path.join(os.environ["FLIGHTMARE_PATH"], "flightlib/configs/quadrotor_env.yaml")
+    with open(cfg_path, "r") as f:
+        cfg = yaml.load(f)
+    mode = str(cfg["quadrotor_env"].get("control_mode", "motor")).lower()
+    return "ctbr" if mode == "ctbr" else "motor"
+
+
 def print_help():
-    print("\nManual control keys")
-    print("  w/s : throttle up/down (all motors)")
-    print("  i/k : pitch forward/back")
-    print("  j/l : roll left/right")
-    print("  u/o : yaw left/right")
-    print("  x   : zero action")
+    print("\nFixed action test keys")
     print("  r   : reset env")
     print("  q   : quit")
-
-
-def update_action_from_key(action, key, delta):
-    # motor order assumed [m0, m1, m2, m3]
-    if key == ord("w"):
-        action += delta
-    elif key == ord("s"):
-        action -= delta
-    elif key == ord("i"):
-        action[0] -= delta
-        action[1] -= delta
-        action[2] += delta
-        action[3] += delta
-    elif key == ord("k"):
-        action[0] += delta
-        action[1] += delta
-        action[2] -= delta
-        action[3] -= delta
-    elif key == ord("j"):
-        action[0] -= delta
-        action[3] -= delta
-        action[1] += delta
-        action[2] += delta
-    elif key == ord("l"):
-        action[0] += delta
-        action[3] += delta
-        action[1] -= delta
-        action[2] -= delta
-    elif key == ord("u"):
-        action[0] += delta
-        action[2] += delta
-        action[1] -= delta
-        action[3] -= delta
-    elif key == ord("o"):
-        action[0] -= delta
-        action[2] -= delta
-        action[1] += delta
-        action[3] += delta
-    elif key == ord("x"):
-        action[:] = 0.0
-    return clip_action(action)
 
 
 def main():
@@ -130,9 +93,18 @@ def main():
     act_dim = env.action_space.shape[0]
     action_single = np.zeros((act_dim,), dtype=np.float32)
     action_batch = np.zeros((env.num_envs, act_dim), dtype=np.float32)
+    control_mode = get_control_mode()
+    up_action = float(np.clip(args.up_action, -1.0, 1.0))
+    if control_mode == "ctbr":
+        # CTBR: [collective_thrust, body_rate_x, body_rate_y, body_rate_z]
+        action_single[0] = up_action
+    else:
+        # Motor: [m0, m1, m2, m3]
+        action_single[:] = up_action
 
     print_help()
     print(f"obs shape: {obs.shape}, action shape per env: {action_single.shape}")
+    print(f"control_mode={control_mode}, fixed_up_action={up_action}, action={np.round(action_single, 3)}")
 
     step_count = 0
     target_dt = float(args.step_dt)
@@ -169,10 +141,7 @@ def main():
                 obs = env.reset()
                 print("[Reset] environment reset")
                 continue
-            if key != -1:
-                action_single = update_action_from_key(
-                    action_single, key, float(args.control_step)
-                )
+            if step_count % 20 == 0:
                 print(
                     f"[Step {step_count}] action={np.round(action_single, 3)} "
                     f"reward0={float(reward[0]): .3f} done0={bool(done[0])}"

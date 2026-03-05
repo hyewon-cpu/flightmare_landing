@@ -2,6 +2,9 @@ quadrotor_env:
    sim_dt: 0.02 
    max_t: 10.0
    control_mode: ctbr  # motor | ctbr
+   init_pos: [0.0, 0.0, 20.0]  # base reset position [x,y,z]
+   randomize_attitude_on_reset: false  # false -> start level (identity quaternion)
+   randomize_attitude_scale: 1.0  # attitude random scale (used only when randomize_attitude_on_reset=true)
    camera:
      # Camera pose in quadrotor body frame (B -> C)
      # pos [0.0, 0.0, -0.3] quaternion [0.7071, -0.7071, 0.0, 0.0] -> 아래 보기

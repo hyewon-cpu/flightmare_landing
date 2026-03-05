@@ -73,12 +73,21 @@ bool QuadrotorEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_state_.setZero();
   quad_act_.setZero();
 
+  // deterministic base state from YAML
+  quad_state_.x(QS::POSX) = init_pos_(0) + spawn_offset_(0);
+  quad_state_.x(QS::POSY) = init_pos_(1) + spawn_offset_(1);
+  quad_state_.x(QS::POSZ) = init_pos_(2) + spawn_offset_(2);
+  quad_state_.x(QS::ATTW) = 1.0;
+  quad_state_.x(QS::ATTX) = 0.0;
+  quad_state_.x(QS::ATTY) = 0.0;
+  quad_state_.x(QS::ATTZ) = 0.0;
+
   if (random) {
     // randomly reset the quadrotor state
-    // reset position
-    quad_state_.x(QS::POSX) = uniform_dist_(random_gen_) + spawn_offset_(0);
-    quad_state_.x(QS::POSY) = uniform_dist_(random_gen_) + spawn_offset_(1);
-    quad_state_.x(QS::POSZ) = uniform_dist_(random_gen_) + 20 + spawn_offset_(2);
+    // reset position around init_pos
+    quad_state_.x(QS::POSX) += uniform_dist_(random_gen_);
+    quad_state_.x(QS::POSY) += uniform_dist_(random_gen_);
+    quad_state_.x(QS::POSZ) += uniform_dist_(random_gen_);
     if (quad_state_.x(QS::POSZ) < -0.0)
       quad_state_.x(QS::POSZ) = -quad_state_.x(QS::POSZ);
     // reset linear velocity
@@ -86,11 +95,20 @@ bool QuadrotorEnv::reset(Ref<Vector<>> obs, const bool random) {
     quad_state_.x(QS::VELY) = uniform_dist_(random_gen_);
     quad_state_.x(QS::VELZ) = uniform_dist_(random_gen_);
     // reset orientation
-    quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_);
-    quad_state_.x(QS::ATTX) = uniform_dist_(random_gen_);
-    quad_state_.x(QS::ATTY) = uniform_dist_(random_gen_);
-    quad_state_.x(QS::ATTZ) = uniform_dist_(random_gen_);
-    quad_state_.qx /= quad_state_.qx.norm();
+    if (randomize_attitude_on_reset_) {
+      quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      quad_state_.x(QS::ATTX) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      quad_state_.x(QS::ATTY) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      quad_state_.x(QS::ATTZ) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      if (quad_state_.qx.norm() > 1e-9) {
+        quad_state_.qx /= quad_state_.qx.norm();
+      } else {
+        quad_state_.x(QS::ATTW) = 1.0;
+        quad_state_.x(QS::ATTX) = 0.0;
+        quad_state_.x(QS::ATTY) = 0.0;
+        quad_state_.x(QS::ATTZ) = 0.0;
+      }
+    }
   }
   // reset quadrotor with random states
   quadrotor_ptr_->reset(quad_state_);
@@ -192,6 +210,27 @@ bool QuadrotorEnv::loadParam(const YAML::Node &cfg) {
   if (cfg["quadrotor_env"]) {
     sim_dt_ = cfg["quadrotor_env"]["sim_dt"].as<Scalar>();
     max_t_ = cfg["quadrotor_env"]["max_t"].as<Scalar>();
+    if (cfg["quadrotor_env"]["init_pos"]) {
+      const std::vector<Scalar> init_pos =
+        cfg["quadrotor_env"]["init_pos"].as<std::vector<Scalar>>();
+      if (init_pos.size() == 3) {
+        init_pos_ = Map<const Vector<3>>(init_pos.data());
+      } else {
+        logger_.warn("init_pos must have 3 elements. Using [0,0,20].");
+      }
+    }
+    if (cfg["quadrotor_env"]["randomize_attitude_on_reset"]) {
+      randomize_attitude_on_reset_ =
+        cfg["quadrotor_env"]["randomize_attitude_on_reset"].as<bool>();
+    }
+    if (cfg["quadrotor_env"]["randomize_attitude_scale"]) {
+      randomize_attitude_scale_ =
+        cfg["quadrotor_env"]["randomize_attitude_scale"].as<Scalar>();
+      if (randomize_attitude_scale_ < 0.0) {
+        logger_.warn("randomize_attitude_scale must be >= 0. Using 1.0.");
+        randomize_attitude_scale_ = 1.0;
+      }
+    }
   } else {
     return false;
   }

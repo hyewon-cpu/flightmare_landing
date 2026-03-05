@@ -88,6 +88,9 @@ class QuadrotorVisEnv final : public EnvBase {
   Vector<quadvisenv::kNAct> act_mean_;
   Vector<quadvisenv::kNAct> act_std_;
   bool use_ctbr_{false};
+  Vector<3> init_pos_{(Vector<3>() << 0.0, 0.0, 20.0).finished()};
+  bool randomize_attitude_on_reset_{true};
+  Scalar randomize_attitude_scale_{1.0};
   Vector<quadvisenv::kNObs> obs_mean_ = Vector<quadvisenv::kNObs>::Zero();
   Vector<quadvisenv::kNObs> obs_std_ = Vector<quadvisenv::kNObs>::Ones();
 
