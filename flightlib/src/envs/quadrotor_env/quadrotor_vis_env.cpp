@@ -137,9 +137,11 @@ bool QuadrotorVisEnv::reset(Ref<Vector<>> obs, const bool random) {
   if (random) {
     // randomly reset the quadrotor state
     // reset position around init_pos
-    quad_state_.x(QS::POSX) += uniform_dist_(random_gen_);
-    quad_state_.x(QS::POSY) += uniform_dist_(random_gen_);
-    quad_state_.x(QS::POSZ) += uniform_dist_(random_gen_);
+    if (randomize_position_on_reset_) {
+      quad_state_.x(QS::POSX) += uniform_dist_(random_gen_) * randomize_position_scale_;
+      quad_state_.x(QS::POSY) += uniform_dist_(random_gen_) * randomize_position_scale_;
+      quad_state_.x(QS::POSZ) += uniform_dist_(random_gen_) * randomize_position_scale_;
+    }
     if (quad_state_.x(QS::POSX) < world_box_(0, 0) + 0.5)
       quad_state_.x(QS::POSX) = world_box_(0, 0) + 0.5;
     if (quad_state_.x(QS::POSX) > world_box_(0, 1) - 0.5)
@@ -151,9 +153,11 @@ bool QuadrotorVisEnv::reset(Ref<Vector<>> obs, const bool random) {
     if (quad_state_.x(QS::POSZ) < -0.0)
       quad_state_.x(QS::POSZ) = -quad_state_.x(QS::POSZ);
     // reset linear velocity
-    quad_state_.x(QS::VELX) = uniform_dist_(random_gen_);
-    quad_state_.x(QS::VELY) = uniform_dist_(random_gen_);
-    quad_state_.x(QS::VELZ) = uniform_dist_(random_gen_);
+    if (randomize_velocity_on_reset_) {
+      quad_state_.x(QS::VELX) = uniform_dist_(random_gen_) * randomize_velocity_scale_;
+      quad_state_.x(QS::VELY) = uniform_dist_(random_gen_) * randomize_velocity_scale_;
+      quad_state_.x(QS::VELZ) = uniform_dist_(random_gen_) * randomize_velocity_scale_;
+    }
     // reset orientation
     if (randomize_attitude_on_reset_) {
       quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
@@ -298,6 +302,30 @@ bool QuadrotorVisEnv::loadParam(const YAML::Node &cfg) {
         init_pos_ = Map<const Vector<3>>(init_pos.data());
       } else {
         logger_.warn("init_pos must have 3 elements. Using [0,0,20].");
+      }
+    }
+    if (cfg["quadrotor_env"]["randomize_position_on_reset"]) {
+      randomize_position_on_reset_ =
+        cfg["quadrotor_env"]["randomize_position_on_reset"].as<bool>();
+    }
+    if (cfg["quadrotor_env"]["randomize_position_scale"]) {
+      randomize_position_scale_ =
+        cfg["quadrotor_env"]["randomize_position_scale"].as<Scalar>();
+      if (randomize_position_scale_ < 0.0) {
+        logger_.warn("randomize_position_scale must be >= 0. Using 1.0.");
+        randomize_position_scale_ = 1.0;
+      }
+    }
+    if (cfg["quadrotor_env"]["randomize_velocity_on_reset"]) {
+      randomize_velocity_on_reset_ =
+        cfg["quadrotor_env"]["randomize_velocity_on_reset"].as<bool>();
+    }
+    if (cfg["quadrotor_env"]["randomize_velocity_scale"]) {
+      randomize_velocity_scale_ =
+        cfg["quadrotor_env"]["randomize_velocity_scale"].as<Scalar>();
+      if (randomize_velocity_scale_ < 0.0) {
+        logger_.warn("randomize_velocity_scale must be >= 0. Using 1.0.");
+        randomize_velocity_scale_ = 1.0;
       }
     }
     if (cfg["quadrotor_env"]["randomize_attitude_on_reset"]) {

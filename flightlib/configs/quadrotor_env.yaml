@@ -3,6 +3,10 @@ quadrotor_env:
    max_t: 10.0
    control_mode: ctbr  # motor | ctbr
    init_pos: [0.0, 0.0, 20.0]  # base reset position [x,y,z]
+   randomize_position_on_reset: false
+   randomize_position_scale: 1.0  # scale for position noise around init_pos
+   randomize_velocity_on_reset: false
+   randomize_velocity_scale: 1.0  # scale for initial linear velocity noise
    randomize_attitude_on_reset: false  # false -> start level (identity quaternion)
    randomize_attitude_scale: 1.0  # attitude random scale (used only when randomize_attitude_on_reset=true)
    camera:
