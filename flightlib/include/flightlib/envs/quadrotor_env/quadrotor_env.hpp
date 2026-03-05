@@ -89,6 +89,7 @@ class QuadrotorEnv final : public EnvBase {
   // action and observation normalization (for learning)
   Vector<quadenv::kNAct> act_mean_;
   Vector<quadenv::kNAct> act_std_;
+  bool use_ctbr_{false};
   Vector<quadenv::kNObs> obs_mean_ = Vector<quadenv::kNObs>::Zero();
   Vector<quadenv::kNObs> obs_std_ = Vector<quadenv::kNObs>::Ones();
 

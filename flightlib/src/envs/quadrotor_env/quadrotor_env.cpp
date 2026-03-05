@@ -36,9 +36,32 @@ QuadrotorEnv::QuadrotorEnv(const std::string &cfg_path)
   obs_dim_ = quadenv::kNObs;
   act_dim_ = quadenv::kNAct;
 
-  Scalar mass = quadrotor_ptr_->getMass();
-  act_mean_ = Vector<quadenv::kNAct>::Ones() * (-mass * Gz) / 4;
-  act_std_ = Vector<quadenv::kNAct>::Ones() * (-mass * 2 * Gz) / 4;
+  // Select control interpretation from YAML:
+  // - motor: [m0, m1, m2, m3] rotor thrust commands
+  // - ctbr: [collective_thrust, body_rate_x, body_rate_y, body_rate_z]
+  std::string control_mode = "motor";
+  if (cfg_["quadrotor_env"] && cfg_["quadrotor_env"]["control_mode"]) {
+    control_mode = cfg_["quadrotor_env"]["control_mode"].as<std::string>();
+  }
+  use_ctbr_ = (control_mode == "ctbr");
+
+  if (use_ctbr_) {
+    const Scalar hover_acc = -Gz;
+    Vector<3> omega_max = Vector<3>::Constant(6.0);
+    if (cfg_["quadrotor_dynamics"] && cfg_["quadrotor_dynamics"]["omega_max"]) {
+      const std::vector<Scalar> omega_max_cfg =
+        cfg_["quadrotor_dynamics"]["omega_max"].as<std::vector<Scalar>>();
+      if (omega_max_cfg.size() == 3) {
+        omega_max = Map<const Vector<3>>(omega_max_cfg.data());
+      }
+    }
+    act_mean_ << hover_acc, 0.0, 0.0, 0.0;
+    act_std_ << hover_acc, omega_max.x(), omega_max.y(), omega_max.z();
+  } else {
+    Scalar mass = quadrotor_ptr_->getMass();
+    act_mean_ = Vector<quadenv::kNAct>::Ones() * (-mass * Gz) / 4;
+    act_std_ = Vector<quadenv::kNAct>::Ones() * (-mass * 2 * Gz) / 4;
+  }
 
   // load parameters
   loadParam(cfg_);
@@ -74,7 +97,15 @@ bool QuadrotorEnv::reset(Ref<Vector<>> obs, const bool random) {
 
   // reset control command
   cmd_.t = 0.0;
-  cmd_.thrusts.setZero();
+  if (use_ctbr_) {
+    cmd_.collective_thrust = -Gz;
+    cmd_.omega.setZero();
+    cmd_.thrusts = Vector<4>::Constant(NAN);
+  } else {
+    cmd_.collective_thrust = NAN;
+    cmd_.omega = Vector<3>::Constant(NAN);
+    cmd_.thrusts.setZero();
+  }
 
   // obtain observations
   getObs(obs);
@@ -96,7 +127,15 @@ bool QuadrotorEnv::getObs(Ref<Vector<>> obs) {
 Scalar QuadrotorEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   quad_act_ = act.cwiseProduct(act_std_) + act_mean_;
   cmd_.t += sim_dt_;
-  cmd_.thrusts = quad_act_;
+  if (use_ctbr_) {
+    cmd_.collective_thrust = quad_act_(0);
+    cmd_.omega = quad_act_.segment<3>(1);
+    cmd_.thrusts = Vector<4>::Constant(NAN);
+  } else {
+    cmd_.collective_thrust = NAN;
+    cmd_.omega = Vector<3>::Constant(NAN);
+    cmd_.thrusts = quad_act_;
+  }
 
   // simulate quadrotor
   quadrotor_ptr_->run(cmd_, sim_dt_);

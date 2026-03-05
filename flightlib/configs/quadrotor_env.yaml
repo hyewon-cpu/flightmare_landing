@@ -1,6 +1,7 @@
 quadrotor_env:
    sim_dt: 0.02 
    max_t: 10.0
+   control_mode: ctbr  # motor | ctbr
    camera:
      # Camera pose in quadrotor body frame (B -> C)
      # pos [0.0, 0.0, -0.3] quaternion [0.7071, -0.7071, 0.0, 0.0] -> 아래 보기
