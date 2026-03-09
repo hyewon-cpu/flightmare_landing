@@ -69,6 +69,110 @@ QuadrotorEnv::QuadrotorEnv(const std::string &cfg_path)
 
 QuadrotorEnv::~QuadrotorEnv() {}
 
+bool QuadrotorEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
+                                            Ref<Vector<2>> pixel_uv,
+                                            Ref<Vector<3>> p_V,
+                                            bool *in_front,
+                                            bool *in_image) const {
+  Quaternion q_WB = quad_state_.q();
+  if (q_WB.norm() > 1e-9) {
+    q_WB.normalize();
+  } else {
+    q_WB = Quaternion(1.0, 0.0, 0.0, 0.0);
+  }
+  const Matrix<3, 3> R_WB = q_WB.toRotationMatrix();
+  const Vector<3> p_WB = quad_state_.p;
+  const Matrix<3, 3> R_WC = R_WB * R_BC_;
+  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_;
+
+  p_V = R_WC.transpose() * (p_W - p_WC);
+  constexpr Scalar kMinDepth = 1e-2;
+  const Scalar depth = p_V.y();
+  const bool point_in_front = (depth > kMinDepth);
+  if (in_front != nullptr) {
+    *in_front = point_in_front;
+  }
+  if (!point_in_front) {
+    if (in_image != nullptr) {
+      *in_image = false;
+    }
+    return false;
+  }
+
+  const Scalar inv_depth = 1.0 / depth;
+  pixel_uv.x() = fx_ * (p_V.x() * inv_depth);
+  pixel_uv.y() = fy_ * (p_V.z() * inv_depth);
+
+  if (!pixel_uv.allFinite()) {
+    if (in_image != nullptr) {
+      *in_image = false;
+    }
+    return false;
+  }
+
+  const bool is_in_image =
+    (pixel_uv.x() >= -cx_) &&
+    (pixel_uv.x() < (static_cast<Scalar>(cam_width_) - cx_)) &&
+    (pixel_uv.y() >= -cy_) &&
+    (pixel_uv.y() < (static_cast<Scalar>(cam_height_) - cy_));
+  if (in_image != nullptr) {
+    *in_image = is_in_image;
+  }
+  return true;
+}
+
+void QuadrotorEnv::updateExtraInfo() {
+  quadrotor_ptr_->getState(&quad_state_);
+  Quaternion q_WB = quad_state_.q();
+  if (q_WB.norm() > 1e-9) {
+    q_WB.normalize();
+  } else {
+    q_WB = Quaternion(1.0, 0.0, 0.0, 0.0);
+  }
+  const Matrix<3, 3> R_WB = q_WB.toRotationMatrix();
+  const Vector<3> p_WB = quad_state_.p;
+  const Matrix<3, 3> R_WC = R_WB * R_BC_;
+  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_;
+  Quaternion q_WC(R_WC);
+  if (q_WC.norm() > 1e-9) {
+    q_WC.normalize();
+  } else {
+    q_WC = Quaternion(1.0, 0.0, 0.0, 0.0);
+  }
+
+  Vector<2> pixel_uv;
+  pixel_uv.setZero();
+  Vector<3> p_V;
+  p_V.setZero();
+  bool in_front = false;
+  bool in_image = false;
+  const bool projected = projectWorldPointToImage(
+    dot_world_pos_, pixel_uv, p_V, &in_front, &in_image);
+
+  extra_info_["cam_pos_x"] = p_WC.x();
+  extra_info_["cam_pos_y"] = p_WC.y();
+  extra_info_["cam_pos_z"] = p_WC.z();
+  extra_info_["cam_qw"] = q_WC.w();
+  extra_info_["cam_qx"] = q_WC.x();
+  extra_info_["cam_qy"] = q_WC.y();
+  extra_info_["cam_qz"] = q_WC.z();
+  extra_info_["p_V_x"] = p_V.x();
+  extra_info_["p_V_y"] = p_V.y();
+  extra_info_["p_V_z"] = p_V.z();
+  extra_info_["u"] = pixel_uv.x();
+  extra_info_["v"] = pixel_uv.y();
+  extra_info_["dot_projected"] = projected ? 1.0f : 0.0f;
+  extra_info_["dot_in_front"] = in_front ? 1.0f : 0.0f;
+  extra_info_["dot_in_image"] = in_image ? 1.0f : 0.0f;
+  extra_info_["drone_pos_x"] = p_WB.x();
+  extra_info_["drone_pos_y"] = p_WB.y();
+  extra_info_["drone_pos_z"] = p_WB.z();
+  extra_info_["drone_qw"] = q_WB.w();
+  extra_info_["drone_qx"] = q_WB.x();
+  extra_info_["drone_qy"] = q_WB.y();
+  extra_info_["drone_qz"] = q_WB.z();
+}
+
 bool QuadrotorEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_state_.setZero();
   quad_act_.setZero();
@@ -165,8 +269,6 @@ Scalar QuadrotorEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   // update observations
   getObs(obs);
 
-  Matrix<3, 3> rot = quad_state_.q().toRotationMatrix();
-
   // ---------------------- reward function design
   // - position tracking
   Scalar pos_reward =
@@ -257,6 +359,69 @@ bool QuadrotorEnv::loadParam(const YAML::Node &cfg) {
       if (randomize_attitude_scale_ < 0.0) {
         logger_.warn("randomize_attitude_scale must be >= 0. Using 1.0.");
         randomize_attitude_scale_ = 1.0;
+      }
+    }
+    if (cfg["quadrotor_env"]["camera"]) {
+      const YAML::Node cam_cfg = cfg["quadrotor_env"]["camera"];
+      if (!cam_cfg.IsMap()) {
+        logger_.warn("quadrotor_env.camera must be a map. Ignoring camera config.");
+      } else {
+      Quaternion q_BC(0.7071f, -0.7071f, 0.0f, 0.0f);
+      Scalar cam_fov = 70.0f;
+      if (cam_cfg["rel_pos"] && cam_cfg["rel_pos"].IsSequence() &&
+          cam_cfg["rel_pos"].size() == 3) {
+        B_r_BC_ << cam_cfg["rel_pos"][0].as<Scalar>(),
+          cam_cfg["rel_pos"][1].as<Scalar>(), cam_cfg["rel_pos"][2].as<Scalar>();
+      }
+      if (cam_cfg["rel_quat_wxyz"] && cam_cfg["rel_quat_wxyz"].IsSequence() &&
+          cam_cfg["rel_quat_wxyz"].size() == 4) {
+        q_BC = Quaternion(cam_cfg["rel_quat_wxyz"][0].as<Scalar>(),
+                          cam_cfg["rel_quat_wxyz"][1].as<Scalar>(),
+                          cam_cfg["rel_quat_wxyz"][2].as<Scalar>(),
+                          cam_cfg["rel_quat_wxyz"][3].as<Scalar>());
+        if (q_BC.norm() > 1e-9) {
+          q_BC.normalize();
+        } else {
+          logger_.warn("Invalid camera quaternion norm in YAML. Using identity.");
+          q_BC = Quaternion(1.0, 0.0, 0.0, 0.0);
+        }
+      }
+      R_BC_ = q_BC.toRotationMatrix();
+      if (cam_cfg["width"]) cam_width_ = cam_cfg["width"].as<int>();
+      if (cam_cfg["height"]) cam_height_ = cam_cfg["height"].as<int>();
+      if (cam_cfg["fov"]) cam_fov = cam_cfg["fov"].as<Scalar>();
+
+      if (cam_cfg["intrinsics"] && cam_cfg["intrinsics"].IsSequence() &&
+          cam_cfg["intrinsics"].size() == 4) {
+        fx_ = cam_cfg["intrinsics"][0].as<Scalar>();
+        fy_ = cam_cfg["intrinsics"][1].as<Scalar>();
+        cx_ = cam_cfg["intrinsics"][2].as<Scalar>();
+        cy_ = cam_cfg["intrinsics"][3].as<Scalar>();
+      } else {
+        if (cam_cfg["fx"]) fx_ = cam_cfg["fx"].as<Scalar>();
+        if (cam_cfg["fy"]) fy_ = cam_cfg["fy"].as<Scalar>();
+        if (cam_cfg["cx"]) cx_ = cam_cfg["cx"].as<Scalar>();
+        if (cam_cfg["cy"]) cy_ = cam_cfg["cy"].as<Scalar>();
+      }
+      if (cam_cfg["dot_world_pos"] && cam_cfg["dot_world_pos"].IsSequence() &&
+          cam_cfg["dot_world_pos"].size() == 3) {
+        dot_world_pos_ << cam_cfg["dot_world_pos"][0].as<Scalar>(),
+          cam_cfg["dot_world_pos"][1].as<Scalar>(),
+          cam_cfg["dot_world_pos"][2].as<Scalar>();
+      }
+
+      if (fx_ <= 0.0f || fy_ <= 0.0f) {
+        constexpr Scalar kPi = static_cast<Scalar>(3.14159265358979323846);
+        const Scalar fov_rad = cam_fov * kPi / 180.0f;
+        const Scalar f_from_fov =
+          (0.5f * static_cast<Scalar>(cam_height_)) / std::tan(0.5f * fov_rad);
+        fx_ = f_from_fov;
+        fy_ = f_from_fov;
+      }
+      if (cx_ == 0.0f && cy_ == 0.0f) {
+        cx_ = 0.5f * static_cast<Scalar>(cam_width_);
+        cy_ = 0.5f * static_cast<Scalar>(cam_height_);
+      }
       }
     }
   } else {

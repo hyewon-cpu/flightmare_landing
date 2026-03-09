@@ -40,6 +40,12 @@ def parser():
                         help="Random seed")
     parser.add_argument('-w', '--weight', type=str, default='./saved/quadrotor_env.zip',
                         help='trained weight path')
+    parser.add_argument('--n_rollouts', type=int, default=5,
+                        help='Number of rollouts to test')
+    parser.add_argument('--max_ep_length', type=int, default=1000,
+                        help='Maximum episode length')
+    parser.add_argument('--log_freq', type=int, default=50,
+                        help='Logging frequency (log every N steps)')
     return parser
 
 
@@ -106,7 +112,50 @@ def main():
     # # Testing mode with a trained weight
     else:
         model = PPO2.load(args.weight)
-        test_model(env, model, render=args.render)
+        
+        # Test loop with logging
+        max_ep_length = args.max_ep_length
+        num_rollouts = args.n_rollouts
+        log_freq = args.log_freq
+        
+        for n_roll in range(num_rollouts):
+            print(f"\n=== Rollout {n_roll} ===")
+            
+            # rollout buffers
+            obs_history = []  # store all observations
+            actions = []
+            
+            obs = env.reset()
+            done = np.array([False])
+            ep_len = 0
+            
+            while not (done[0] or ep_len >= max_ep_length):
+                # policy inference
+                act, _ = model.predict(obs, deterministic=True)
+                
+                # env step
+                obs, reward, done, info = env.step(act)
+                
+                ep_len += 1
+                
+                # ---- logging ----
+                # Observation structure: [pos_x, pos_y, pos_z, euler_z, euler_y, euler_x, vel_x, vel_y, vel_z, omega_x, omega_y, omega_z]
+                obs_history.append(obs[0].tolist())
+                actions.append(act[0].tolist())
+                
+                # Log drone state at each step
+                if ep_len % log_freq == 0 or ep_len == 1:
+                    pos = obs[0, :3]  # position [x, y, z]
+                    euler = obs[0, 3:6]  # orientation (euler angles ZYX)
+                    vel = obs[0, 6:9]  # linear velocity
+                    omega = obs[0, 9:12]  # angular velocity
+                    print(f"Step {ep_len:4d} | pos: [{pos[0]:7.3f}, {pos[1]:7.3f}, {pos[2]:7.3f}] | "
+                          f"euler: [{euler[0]:7.4f}, {euler[1]:7.4f}, {euler[2]:7.4f}] | "
+                          f"vel: [{vel[0]:7.3f}, {vel[1]:7.3f}, {vel[2]:7.3f}] | "
+                          f"omega: [{omega[0]:7.4f}, {omega[1]:7.4f}, {omega[2]:7.4f}] | "
+                          f"action: [{act[0, 0]:7.4f}, {act[0, 1]:7.4f}, {act[0, 2]:7.4f}, {act[0, 3]:7.4f}]")
+            
+            print(f"Rollout {n_roll} finished | length = {ep_len}")
 
 
 if __name__ == "__main__":

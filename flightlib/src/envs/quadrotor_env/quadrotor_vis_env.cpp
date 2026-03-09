@@ -32,11 +32,9 @@ QuadrotorVisEnv::QuadrotorVisEnv(const std::string &cfg_path)
   rgb_camera_ = std::make_shared<RGBCamera>();
 
   // Camera defaults (body -> camera). Can be overridden from YAML:
-  // quadrotor_env.camera.{rel_pos, rel_quat_wxyz, width, height, fov}
-  Vector<3> B_r_BC(0.0, 0.0, 0.3);
+  // quadrotor_env.camera.{rel_pos, rel_quat_wxyz, width, height, fov,
+  // fx, fy, cx, cy, intrinsics, tag_center_world, tag_corner_world}
   Quaternion q_BC(1.0, 0.0, 0.0, 0.0);  // w, x, y, z
-  int cam_width = quadvisenv::kImgWidth;
-  int cam_height = quadvisenv::kImgHeight;
   Scalar cam_fov = 70.0;
 
   if (cfg_["quadrotor_env"] && cfg_["quadrotor_env"]["camera"]) {
@@ -44,7 +42,7 @@ QuadrotorVisEnv::QuadrotorVisEnv(const std::string &cfg_path)
 
     if (cam_cfg["rel_pos"] && cam_cfg["rel_pos"].IsSequence() &&
         cam_cfg["rel_pos"].size() == 3) {
-      B_r_BC << cam_cfg["rel_pos"][0].as<Scalar>(),
+      B_r_BC_ << cam_cfg["rel_pos"][0].as<Scalar>(),
         cam_cfg["rel_pos"][1].as<Scalar>(), cam_cfg["rel_pos"][2].as<Scalar>();
     }
 
@@ -62,17 +60,67 @@ QuadrotorVisEnv::QuadrotorVisEnv(const std::string &cfg_path)
       }
     }
 
-    if (cam_cfg["width"]) cam_width = cam_cfg["width"].as<int>();
-    if (cam_cfg["height"]) cam_height = cam_cfg["height"].as<int>();
+    if (cam_cfg["width"]) cam_width_ = cam_cfg["width"].as<int>();
+    if (cam_cfg["height"]) cam_height_ = cam_cfg["height"].as<int>();
     if (cam_cfg["fov"]) cam_fov = cam_cfg["fov"].as<Scalar>();
+
+    if (cam_cfg["intrinsics"] && cam_cfg["intrinsics"].IsSequence() &&
+        cam_cfg["intrinsics"].size() == 4) {
+      fx_ = cam_cfg["intrinsics"][0].as<Scalar>();
+      fy_ = cam_cfg["intrinsics"][1].as<Scalar>();
+      cx_ = cam_cfg["intrinsics"][2].as<Scalar>();
+      cy_ = cam_cfg["intrinsics"][3].as<Scalar>();
+    } else {
+      if (cam_cfg["fx"]) fx_ = cam_cfg["fx"].as<Scalar>();
+      if (cam_cfg["fy"]) fy_ = cam_cfg["fy"].as<Scalar>();
+      if (cam_cfg["cx"]) cx_ = cam_cfg["cx"].as<Scalar>();
+      if (cam_cfg["cy"]) cy_ = cam_cfg["cy"].as<Scalar>();
+    }
+
+    if (cam_cfg["tag_center_world"] && cam_cfg["tag_center_world"].IsSequence() &&
+        cam_cfg["tag_center_world"].size() == 3) {
+      tag_center_world_ << cam_cfg["tag_center_world"][0].as<Scalar>(),
+        cam_cfg["tag_center_world"][1].as<Scalar>(),
+        cam_cfg["tag_center_world"][2].as<Scalar>();
+    }
+    if (cam_cfg["tag_corner_world"] && cam_cfg["tag_corner_world"].IsSequence() &&
+        cam_cfg["tag_corner_world"].size() == 4) {
+      bool corners_valid = true;
+      for (int i = 0; i < 4; i++) {
+        if (!cam_cfg["tag_corner_world"][i].IsSequence() ||
+            cam_cfg["tag_corner_world"][i].size() != 3) {
+          corners_valid = false;
+          break;
+        }
+        tag_corner_world_.col(i) << cam_cfg["tag_corner_world"][i][0].as<Scalar>(),
+          cam_cfg["tag_corner_world"][i][1].as<Scalar>(),
+          cam_cfg["tag_corner_world"][i][2].as<Scalar>();
+      }
+      if (!corners_valid) {
+        logger_.warn("tag_corner_world must be [[x,y,z] x4]. Using defaults.");
+      }
+    }
   }
 
-  Matrix<3, 3> R_BC = q_BC.toRotationMatrix();
+  R_BC_ = q_BC.toRotationMatrix();
 
-  rgb_camera_->setWidth(cam_width);
-  rgb_camera_->setHeight(cam_height);
+  if (fx_ <= 0.0 || fy_ <= 0.0) {
+    constexpr Scalar kPi = static_cast<Scalar>(3.14159265358979323846);
+    const Scalar fov_rad = cam_fov * kPi / 180.0;
+    const Scalar f_from_fov =
+      (0.5 * static_cast<Scalar>(cam_height_)) / std::tan(0.5 * fov_rad);
+    fx_ = f_from_fov;
+    fy_ = f_from_fov;
+  }
+  if (cx_ == 0.0 && cy_ == 0.0) {
+    cx_ = 0.5 * static_cast<Scalar>(cam_width_);
+    cy_ = 0.5 * static_cast<Scalar>(cam_height_);
+  }
+
+  rgb_camera_->setWidth(cam_width_);
+  rgb_camera_->setHeight(cam_height_);
   rgb_camera_->setFOV(cam_fov);
-  rgb_camera_->setRelPose(B_r_BC, R_BC);
+  rgb_camera_->setRelPose(B_r_BC_, R_BC_);
 
   rgb_camera_->setPostProcesscing(std::vector<bool>{false, false, false});
   quadrotor_ptr_->addRGBCamera(rgb_camera_);
@@ -203,6 +251,41 @@ bool QuadrotorVisEnv::getObs(Ref<Vector<>> obs) {
   cv::Mat rgb_image;
   if (rgb_camera_ != nullptr && rgb_camera_->getRGBImage(rgb_image) &&
       !rgb_image.empty()) {
+    // Overlay projected tag center/corners for visualization.
+    Vector<2> center_uv;
+    center_uv.setZero();
+    bool center_in_image = false;
+    const bool center_projected = projectWorldPointToImage(
+      tag_center_world_, center_uv, nullptr, &center_in_image);
+    bool corners_projected = true;
+    Vector<2> corner_uv[4];
+    for (int i = 0; i < 4; i++) {
+      bool in_image = false;
+      corner_uv[i].setZero();
+      const bool projected = projectWorldPointToImage(
+        tag_corner_world_.col(i), corner_uv[i], nullptr, &in_image);
+      corners_projected = corners_projected && projected && in_image;
+    }
+    if (center_projected && center_in_image && corners_projected) {
+      auto to_pixel = [&](const Vector<2> &uv) {
+        const int x = std::max(0, std::min(cam_width_ - 1,
+          static_cast<int>(std::round(uv.x() + cx_))));
+        const int y = std::max(0, std::min(cam_height_ - 1,
+          static_cast<int>(std::round(uv.y() + cy_))));
+        return cv::Point(x, y);
+      };
+      const cv::Scalar edge_color(0, 255, 255);    // yellow
+      const cv::Scalar corner_color(255, 255, 0);  // cyan
+      const cv::Scalar center_color(0, 0, 255);    // red
+      for (int i = 0; i < 4; i++) {
+        const cv::Point p0 = to_pixel(corner_uv[i]);
+        const cv::Point p1 = to_pixel(corner_uv[(i + 1) % 4]);
+        cv::line(rgb_image, p0, p1, edge_color, 2);
+        cv::circle(rgb_image, p0, 3, corner_color, -1);
+      }
+      cv::circle(rgb_image, to_pixel(center_uv), 4, center_color, -1);
+    }
+
     cv::Mat resized = rgb_image;
     if (rgb_image.cols != quadvisenv::kImgWidth ||
         rgb_image.rows != quadvisenv::kImgHeight) {
@@ -231,6 +314,43 @@ bool QuadrotorVisEnv::getObs(Ref<Vector<>> obs) {
   }
 
   obs.segment<quadvisenv::kNObs>(quadvisenv::kObs) = quad_obs_;
+  return true;
+}
+
+bool QuadrotorVisEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
+                                               Ref<Vector<2>> pixel_uv,
+                                               bool *in_front,
+                                               bool *in_image) const {
+  const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+  const Vector<3> p_WB = quad_state_.p;
+  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_;
+  const Matrix<3, 3> R_WC = R_WB * R_BC_;
+
+  const Vector<3> p_C = R_WC.transpose() * (p_W - p_WC);
+  const Scalar depth = p_C.z();
+  constexpr Scalar kMinDepth = static_cast<Scalar>(1e-6);
+  const bool point_in_front = (depth > kMinDepth);
+  if (in_front != nullptr) {
+    *in_front = point_in_front;
+  }
+  if (!point_in_front) {
+    if (in_image != nullptr) {
+      *in_image = false;
+    }
+    return false;
+  }
+
+  pixel_uv.x() = fx_ * (p_C.x() / depth);
+  pixel_uv.y() = fy_ * (p_C.y() / depth);
+
+  const Scalar px = pixel_uv.x() + cx_;
+  const Scalar py = pixel_uv.y() + cy_;
+  const bool inside =
+    (px >= 0.0 && px < static_cast<Scalar>(cam_width_) &&
+     py >= 0.0 && py < static_cast<Scalar>(cam_height_));
+  if (in_image != nullptr) {
+    *in_image = inside;
+  }
   return true;
 }
 
@@ -338,6 +458,30 @@ bool QuadrotorVisEnv::loadParam(const YAML::Node &cfg) {
       if (randomize_attitude_scale_ < 0.0) {
         logger_.warn("randomize_attitude_scale must be >= 0. Using 1.0.");
         randomize_attitude_scale_ = 1.0;
+      }
+    }
+    if (cfg["quadrotor_env"]["camera"] && cfg["quadrotor_env"]["camera"]["tag_center_world"] &&
+        cfg["quadrotor_env"]["camera"]["tag_center_world"].IsSequence() &&
+        cfg["quadrotor_env"]["camera"]["tag_center_world"].size() == 3) {
+      tag_center_world_ << cfg["quadrotor_env"]["camera"]["tag_center_world"][0].as<Scalar>(),
+        cfg["quadrotor_env"]["camera"]["tag_center_world"][1].as<Scalar>(),
+        cfg["quadrotor_env"]["camera"]["tag_center_world"][2].as<Scalar>();
+    }
+    if (cfg["quadrotor_env"]["camera"] && cfg["quadrotor_env"]["camera"]["tag_corner_world"] &&
+        cfg["quadrotor_env"]["camera"]["tag_corner_world"].IsSequence() &&
+        cfg["quadrotor_env"]["camera"]["tag_corner_world"].size() == 4) {
+      bool corners_valid = true;
+      for (int i = 0; i < 4; i++) {
+        const YAML::Node corner = cfg["quadrotor_env"]["camera"]["tag_corner_world"][i];
+        if (!corner.IsSequence() || corner.size() != 3) {
+          corners_valid = false;
+          break;
+        }
+        tag_corner_world_.col(i) << corner[0].as<Scalar>(),
+          corner[1].as<Scalar>(), corner[2].as<Scalar>();
+      }
+      if (!corners_valid) {
+        logger_.warn("tag_corner_world must be [[x,y,z] x4]. Using defaults.");
       }
     }
   } else {

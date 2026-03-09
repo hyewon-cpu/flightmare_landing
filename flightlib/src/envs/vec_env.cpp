@@ -1,5 +1,6 @@
 #include "flightlib/envs/vec_env.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_vis_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_dot_env.hpp"
 #include <cmath>
 
 namespace flightlib {
@@ -286,5 +287,6 @@ bool VecEnv<EnvBase>::getTruncationEnabled(void) const { // hj added
 // Segmentation fault (core dumped)
 template class VecEnv<QuadrotorEnv>;
 template class VecEnv<QuadrotorVisEnv>;
+template class VecEnv<QuadrotorDotEnv>;
 
 }  // namespace flightlib

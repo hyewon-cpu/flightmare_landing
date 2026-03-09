@@ -1,7 +1,7 @@
 env:
   seed: 1
   scene_id: 1  # 0 industry, 1 island
-  num_envs: 100
-  num_threads: 10
+  num_envs: 1000
+  num_threads: 20
   spawn_spacing: 3.0 
   render: no 

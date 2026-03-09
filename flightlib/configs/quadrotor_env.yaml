@@ -1,23 +1,57 @@
 quadrotor_env:
-   sim_dt: 0.02 
-   max_t: 10.0
-   control_mode: ctbr  # motor | ctbr
-   init_pos: [0.0, 0.0, 20.0]  # base reset position [x,y,z]
-   randomize_position_on_reset: false
-   randomize_position_scale: 1.0  # scale for position noise around init_pos
-   randomize_velocity_on_reset: false
-   randomize_velocity_scale: 1.0  # scale for initial linear velocity noise
-   randomize_attitude_on_reset: false  # false -> start level (identity quaternion)
-   randomize_attitude_scale: 1.0  # attitude random scale (used only when randomize_attitude_on_reset=true)
-   camera:
+  sim_dt: 0.02
+  max_t: 10.0
+  control_mode: ctbr   # motor | ctbr
+  world_box: [[-30.0, 30.0], [-30.0, 30.0], [0.0, 60.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
+  init_pos: [5.5, 6.5, 40.0]                   # base reset position [x,y,z]
+  randomize_position_on_reset: false
+  randomize_position_scale: 1.0   # scale for position noise around init_pos
+  randomize_velocity_on_reset: false
+  randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
+  randomize_attitude_on_reset: false   # false -> start level (identity quaternion)
+  randomize_attitude_scale: 1.0   # attitude random scale (used only when randomize_attitude_on_reset=true)
+  camera:
      # Camera pose in quadrotor body frame (B -> C)
      # pos [0.0, 0.0, -0.3] quaternion [0.7071, -0.7071, 0.0, 0.0] -> 아래 보기
      # pos [0.0, 0.0, 0.3] quaternion [1.0, 0.0, 0.0, 0.0] -> 앞에 보기
-     rel_pos: [0.0, 0.0, -0.3]          # [x, y, z] meters
-     rel_quat_wxyz: [0.7071, -0.7071, 0.0, 0.0] # quaternion [w, x, y, z]
-     width: 256
-     height: 256
-     fov: 70.0
+    rel_pos: [0.0, 0.0, -0.3]           # [x, y, z] meters
+    rel_quat_wxyz: [0.7071, -0.7071, 0.0, 0.0]  # quaternion [w, x, y, z]
+    width: 256
+    height: 256
+    fov: 70.0
+    log_world_pose: false
+    log_world_pose_interval_steps: 50
+    dot_world_pos: [5.5, 6.5, 3.0]
+    # 3 QR tag centers in world frame
+    tag_centers_world:
+      - [5.5, 6.5, 3.0]
+      - [-2.3, 4.1, 3.0]
+      - [-0.6, 8.0, 3.0]
+    # For each tag: 4 corners in world frame (p0->p1->p2->p3)
+    # shape: [[[x,y,z] x4] x3]
+    tag_corners_world:
+      - # tag 0
+        - [9.5, 2.5, 3.0]
+        - [1.5, 2.5, 3.0]
+        - [1.5, 10.5, 3.0]
+        - [9.5, 10.5, 3.0]
+      - # tag 1
+        - [-0.3, 2.1, 3.0]
+        - [-4.3, 2.1, 3.0]
+        - [-4.3, 6.1, 3.0]
+        - [-0.3, 6.1, 3.0]
+      - # tag 2
+        - [0.4, 7.0, 3.0]
+        - [-1.6, 7.0, 3.0]
+        - [-1.6, 9.0, 3.0]
+        - [ 0.4, 9.0, 3.0]
+    # Backward-compatible single-tag keys (optional)
+    tag_center_world: [5.5, 6.5, 3.0]
+    tag_corner_world:
+      - [9.5, 2.5, 3.0]
+      - [1.5, 2.5, 3.0]
+      - [1.5, 10.5, 3.0]
+      - [9.5, 10.5, 3.0]
 
 quadrotor_dynamics:
   mass: 0.73
@@ -25,13 +59,76 @@ quadrotor_dynamics:
   motor_omega_min: 150.0 # motor rpm min
   motor_omega_max: 3000.0 # motor rpm max
   motor_tau: 0.0001 # motor step response
-  thrust_map: [1.3298253500372892e-06, 0.0038360810526746033, -1.7689986848125325]
+  thrust_map: [1.3298253500372891e-06, 0.0038360810526746033, 
+      -1.7689986848125325]
   kappa: 0.016 # rotor drag coeff
-  omega_max: [6.0, 6.0, 6.0]  # body rate constraint (x, y, z) 
+  omega_max: [0.8, 0.8, 0.5]  # body rate constraint (x, y, z) 
 
 rl:
   pos_coeff: -0.05        # reward coefficient for position
   ori_coeff: -0.05        # reward coefficient for orientation
   lin_vel_coeff: -0.005   # reward coefficient for linear velocity
   ang_vel_coeff: -0.005   # reward coefficient for angular velocity
-  act_coeff: -0.0002  # reward coefficient for control actions
+  act_coeff: -0.01  # reward coefficient for control actions
+
+  #landing reward coefficients (uv + attitude + gated descent)
+  landing_w_xy: 0.08 #xy position difference penalty weight
+  landing_w_z: 0.05 #z tracking weight when center+tilt gates are satisfied
+  landing_w_vel_xy: 0.03 #xy speed squared penalty weight (applies to near/far if specific keys are absent)
+  landing_w_vel_z: 0.05 #z speed squared penalty weight (applies to near/far if specific keys are absent)
+  #landing_w_vel_xy_near: 0.03
+  #landing_w_vel_xy_far: 0.03
+  #landing_w_vel_z_near: 0.03
+  #landing_w_vel_z_far: 0.03
+  #landing_near_ground_z: 5.0 #switch altitude for near/far velocity weights
+
+  #attitude / rate / action smoothness
+  landing_w_tilt: 0.1 #roll/pitch squared penalty
+  landing_tilt_hard: 10 #terminate when tilt exceeds this [rad]
+  landing_tilt_hard_penalty: -30.0 #terminal reward for excessive tilt
+  landing_w_yaw: 0.05 #yaw squared penalty
+  landing_w_body_rate: 0.08 #wx/wy squared penalty
+  landing_w_rate_cmd_xy: 0.03 #commanded roll/pitch rate squared penalty
+  landing_w_duv: 0.03 #du/dv squared penalty
+  landing_z_safe_margin: 2.0 #early-descent guard margin above goal z
+
+  #time
+  landing_time_penalty: 0.002
+
+  #image coordinate
+  landing_w_img_center: 0.08 #u/v squared penalty weight
+  landing_dot_not_visible_penalty: 0.03 #penalty when dot is out of view
+  landing_center_u_gate: 0.05 #normalized horizontal gate for hold bonus
+  landing_center_v_gate: 0.05 #normalized vertical gate for hold bonus
+  landing_center_hold_bonus: 10 #bonus when target stays centered
+
+  landing_w_early_descend: 0.02 #penalty weigt for descending early while not being centered/leveled
+
+
+
+  #terminal 조건
+  landing_terminal_z: 3.02  #consider terminted when z<terminal_Z
+  landing_success_xy_error: 0.5  #xy error needs to be smaller than this to succeed
+  landing_success_vz: 0.25  #z error needs to be smaller than this to succeed
+  landing_success_tilt: 0.2 #tilt needs to be smaller than this to succeed
+  landing_success_vxy: 0.3  #xy speed needs to be smaller than this to succeed
+  landing_success_body_rate: 0.3 #body-rate norm needs to be smaller than this to succeed
+  landing_success_reward: 100.0
+  landing_failure_reward: -10.0
+  speed_log_interval_steps: 10000
+
+  # tag-based image-space reward
+  tag_vis_coeff: 1.0 #reward coefficient for tag visibility (binary)
+  tag_center_coeff: 1.0 #reward coefficient for tag center error (squared)
+  tag_area_coeff: 1.5 #reward coefficient for tag area error (squared)
+  tag_shape_coeff: 1.5 #reward coefficient for tag shape error (squared)
+  tag_smooth_coeff: 0.01  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
+  #tag_target_area: 400.0 #target tag area in pixels (corresponding to being centered at the target altitude)
+  tag_min_area: 40.0 #minimum area for partial reward (corresponding to being visible at the max altitude)
+  stage_miss_threshold: 4  # consecutive misses before switching to next QR stage
+  stage_require_next_visible: true  # only switch when next-stage QR is visible
+  stage_switch_bonus: 2.0  # bonus when stage is advanced
+  stage_target_area: [50.0, 50.0, 50.0]  # target projected area for [largest, middle, smallest]
+  invisible_base_penalty: 0.5  # base penalty when active QR is not fully visible
+  invisible_miss_penalty: 0.2  # additional penalty per consecutive miss step
+  invisible_stage_penalty: 0.2  # additional penalty scaled by stage index

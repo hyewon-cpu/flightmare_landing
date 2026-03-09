@@ -1,0 +1,13 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/flightmare_develop/flightlib/build_local/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/build_local/externals/pybind11-src/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/externals/yaml-build/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/externals/yaml-build/util/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/externals/googletest-build/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/externals/googletest-build/googlemock/cmake_install.cmake",
+		"/home/flightmare_develop/flightlib/externals/googletest-build/googletest/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -50,6 +50,7 @@ class QuadrotorEnv final : public EnvBase {
   // - public OpenAI-gym-style functions
   bool reset(Ref<Vector<>> obs, const bool random = true) override;
   Scalar step(const Ref<Vector<>> act, Ref<Vector<>> obs) override;
+  void updateExtraInfo() override;
 
   // - public set functions
   bool loadParam(const YAML::Node &cfg);
@@ -70,6 +71,12 @@ class QuadrotorEnv final : public EnvBase {
                                   const QuadrotorEnv &quad_env);
 
  private:
+  bool projectWorldPointToImage(const Ref<const Vector<3>> p_W,
+                                Ref<Vector<2>> pixel_uv,
+                                Ref<Vector<3>> p_V,
+                                bool *in_front = nullptr,
+                                bool *in_image = nullptr) const;
+
   // quadrotor
   std::shared_ptr<Quadrotor> quadrotor_ptr_;
   QuadState quad_state_;
@@ -99,6 +106,15 @@ class QuadrotorEnv final : public EnvBase {
   Scalar randomize_attitude_scale_{1.0};
   Vector<quadenv::kNObs> obs_mean_ = Vector<quadenv::kNObs>::Zero();
   Vector<quadenv::kNObs> obs_std_ = Vector<quadenv::kNObs>::Ones();
+  Vector<3> dot_world_pos_{(Vector<3>() << 0.0, 0.0, 0.0).finished()};
+  Vector<3> B_r_BC_{(Vector<3>() << 0.0, 0.0, -0.3).finished()};
+  Matrix<3, 3> R_BC_{Matrix<3, 3>::Identity()};
+  Scalar fx_{0.0};
+  Scalar fy_{0.0};
+  Scalar cx_{0.0};
+  Scalar cy_{0.0};
+  int cam_width_{84};
+  int cam_height_{84};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;

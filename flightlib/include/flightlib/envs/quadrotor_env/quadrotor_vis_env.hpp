@@ -2,6 +2,7 @@
 
 // std lib
 #include <stdlib.h>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -64,6 +65,11 @@ class QuadrotorVisEnv final : public EnvBase {
                                   const QuadrotorVisEnv &quad_env);
 
  private:
+  bool projectWorldPointToImage(const Ref<const Vector<3>> p_W,
+                                Ref<Vector<2>> pixel_uv,
+                                bool *in_front = nullptr,
+                                bool *in_image = nullptr) const;
+
   // quadrotor
   std::shared_ptr<Quadrotor> quadrotor_ptr_;
   QuadState quad_state_;
@@ -97,6 +103,19 @@ class QuadrotorVisEnv final : public EnvBase {
   Scalar randomize_attitude_scale_{1.0};
   Vector<quadvisenv::kNObs> obs_mean_ = Vector<quadvisenv::kNObs>::Zero();
   Vector<quadvisenv::kNObs> obs_std_ = Vector<quadvisenv::kNObs>::Ones();
+  Vector<3> tag_center_world_{(Vector<3>() << 0.0, 0.0, 0.0).finished()};
+  Matrix<3, 4> tag_corner_world_{
+    (Matrix<3, 4>() << -0.5, 0.5, 0.5, -0.5,
+     -0.5, -0.5, 0.5, 0.5,
+      0.0, 0.0, 0.0, 0.0).finished()};
+  Vector<3> B_r_BC_{(Vector<3>() << 0.0, 0.0, 0.3).finished()};
+  Matrix<3, 3> R_BC_{Matrix<3, 3>::Identity()};
+  Scalar fx_{0.0};
+  Scalar fy_{0.0};
+  Scalar cx_{0.0};
+  Scalar cy_{0.0};
+  int cam_width_{84};
+  int cam_height_{84};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;

@@ -6,6 +6,8 @@ import os
 import io
 import math
 import argparse
+import glob
+import sys
 import numpy as np
 import torch
 
@@ -23,6 +25,24 @@ from tonedio_baselines.envs.vec_env_wrapper import (
 )
 import tonedio_baselines.common.util as U
 #
+def _prefer_local_flightgym():
+    root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    patterns = [
+        os.path.join(root, "flightlib", "build_local", "flightgym*.so"),
+        os.path.join(root, "flightlib", "build_cpp", "flightgym*.so"),
+        os.path.join(root, "flightlib", "build", "flightgym*.so"),
+    ]
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            module_dir = os.path.dirname(matches[-1])
+            if module_dir not in sys.path:
+                sys.path.insert(0, module_dir)
+            return matches[-1]
+    return None
+
+
+_LOCAL_FLIGHTGYM_SO = _prefer_local_flightgym()
 from flightgym import QuadrotorEnv_v1
 
 from stable_baselines3 import PPO
@@ -59,7 +79,7 @@ def parser():
     parser.add_argument('--seed', type=int, default=0,
                         help="Random seed")
     parser.add_argument('-w', '--weight', type=str, 
-    default='/home/heejun/projects/flightmare/tonediorl/examples/saved/2026-03-05-09-54-29/checkpoints/ppo_model_25000000_steps.zip',
+    default='/home/flightmare_develop/tonediorl/examples/saved/hovering2/checkpoints/ppo_model_25000000_steps.zip',
                         help='trained weight path')
     
     # eval freq, model_save_freq 모두 timestep 기준
@@ -89,8 +109,64 @@ def build_env(cfg_yaml_str, use_obs_norm=True):
     return env
 
 
+def _get_extra_info(info):
+    if not info or len(info) == 0:
+        return {}
+    return info[0].get("extra_info", {}) if isinstance(info[0], dict) else {}
+
+
+def _print_step_state(ep_len, obs, extra_info):
+    pos = obs[0, 0:3]
+    euler = obs[0, 3:6]
+    vel = obs[0, 6:9]
+    ang_vel = obs[0, 9:12]
+    drone_pos_str = (
+        f"({extra_info.get('drone_pos_x', pos[0]):+.3f}, "
+        f"{extra_info.get('drone_pos_y', pos[1]):+.3f}, "
+        f"{extra_info.get('drone_pos_z', pos[2]):+.3f})"
+    ) if extra_info else f"({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})"
+    drone_quat_str = (
+        f"({extra_info.get('drone_qw', float('nan')):+.4f}, "
+        f"{extra_info.get('drone_qx', float('nan')):+.4f}, "
+        f"{extra_info.get('drone_qy', float('nan')):+.4f}, "
+        f"{extra_info.get('drone_qz', float('nan')):+.4f})"
+    ) if extra_info else "(+nan, +nan, +nan, +nan)"
+    print(
+        f"[step {ep_len:04d}] "
+        f"drone pos={drone_pos_str} "
+        f"drone_q_wxyz={drone_quat_str} "
+        f"euler_zyx=({euler[0]:+.3f}, {euler[1]:+.3f}, {euler[2]:+.3f}) "
+        f"v=({vel[0]:+.3f}, {vel[1]:+.3f}, {vel[2]:+.3f}) "
+        f"w=({ang_vel[0]:+.3f}, {ang_vel[1]:+.3f}, {ang_vel[2]:+.3f})"
+    )
+    print(
+        "           "
+        f"cam_pos=({extra_info.get('cam_pos_x', float('nan')):+.3f}, "
+        f"{extra_info.get('cam_pos_y', float('nan')):+.3f}, "
+        f"{extra_info.get('cam_pos_z', float('nan')):+.3f}) "
+        f"cam_q_wxyz=({extra_info.get('cam_qw', float('nan')):+.4f}, "
+        f"{extra_info.get('cam_qx', float('nan')):+.4f}, "
+        f"{extra_info.get('cam_qy', float('nan')):+.4f}, "
+        f"{extra_info.get('cam_qz', float('nan')):+.4f}) "
+        f"p_V=({extra_info.get('p_V_x', float('nan')):+.3f}, "
+        f"{extra_info.get('p_V_y', float('nan')):+.3f}, "
+        f"{extra_info.get('p_V_z', float('nan')):+.3f}) "
+        f"uv=({extra_info.get('u', float('nan')):+.2f}, "
+        f"{extra_info.get('v', float('nan')):+.2f})"
+    )
+    if not extra_info:
+        print("           [warn] extra_info is empty. Check loaded flightgym module path and FLIGHTMARE_PATH.")
+
+
 def main():
     args = parser().parse_args()
+    try:
+        import flightgym
+        print(f"[Runtime] flightgym module: {flightgym.__file__}")
+    except Exception:
+        pass
+    if _LOCAL_FLIGHTGYM_SO is not None:
+        print(f"[Runtime] preferred local flightgym candidate: {_LOCAL_FLIGHTGYM_SO}")
 
     yaml = YAML()  # 기본 typ='rt' (RoundTrip)
     cfg_path = os.path.join(os.environ["FLIGHTMARE_PATH"], "flightlib/configs/vec_env.yaml")
@@ -100,6 +176,7 @@ def main():
     if not args.train:
         cfg["env"]["num_envs"] = 1
         cfg["env"]["num_threads"] = 1
+        cfg['env']['scene_id'] =1
 
     cfg["env"]["render"] = "yes" if args.render else "no"
 
@@ -316,6 +393,9 @@ def main():
                 obs, reward, done, info = env.step(act)
 
                 ep_len += 1
+
+                extra_info = _get_extra_info(info)
+                _print_step_state(ep_len, obs, extra_info)
 
                 # ---- logging (obs shape: [1, 12]) ----
                 pos.append(obs[0, 0:3].tolist())
