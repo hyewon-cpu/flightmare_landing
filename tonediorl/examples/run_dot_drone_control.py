@@ -551,7 +551,7 @@ def main():
 
     else:
         # Test mode (simple loop)
-        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints/ppo_model_25000000_steps.zip') 
+        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/best_model/best_model.zip') 
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled

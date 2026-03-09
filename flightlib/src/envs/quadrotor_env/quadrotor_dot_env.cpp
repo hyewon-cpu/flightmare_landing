@@ -585,8 +585,9 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     (quad_state_.p.head<2>() - tag_center_world_[active_tag_idx].head<2>()).norm();
   Scalar r_xy = -(xy_error * xy_error);
   Scalar r_center = 0.0; // tag center - 이미지 중심 거리. 가까울수록 penalty 줄어듬 
-  Scalar r_area = 0.0; // tag area - target area 차이. target area는 stage마다 다름. 실제 tag 면적이 target area에 가까울수록 penalty 줄어듬
+  Scalar r_area = 0.0; // tag area 지수형 보상. target area에 가까울수록 1에 가까움
   Scalar r_shape = 0.0; // tag shape - edge length 균일성, 대각선 길이 균일성, 직각 정도, 작은 면적 패널티 종합. 실제 tag 모양이 정사각형에 가까울수록 penalty 줄어듬
+  Scalar r_area_small = 0.0; // tag_min_area 미만일 때만 적용되는 별도 패널티
   Scalar r_smooth = -act.cast<Scalar>().squaredNorm(); // 행동의 크기에 대한 패널티. 작은 행동일수록 penalty 줄어듬 (즉, 행동이 너무 크면 패널티가 커짐)
   Scalar r_invisible = 0.0; // 태그가 보이지 않을 때 패널티. 보이지 않을수록 penalty 커짐
   Scalar observed_area = -1.0; // active tag 면적(관측 불가 시 -1)
@@ -613,8 +614,11 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
       (y0 * x1 + y1 * x2 + y2 * x3 + y3 * x0); //사각형의 면적을 구하는 공식. (x0,y0), (x1,y1), (x2,y2), (x3,y3)가 사각형의 네 꼭짓점 좌표일 때, 공식에서 나오는 값은 실제 면적의 2배가 되므로, 최종적으로는 절댓값을 취한 후 0.5를 곱하여 실제 면적을 구합니다.
     const Scalar area = std::abs(area_twice) * 0.5;
     observed_area = area;
-    const Scalar target_area = std::max(stage_target_area_[active_slot], Scalar(1.0)); //stage마다 다른 target area 설정. target area는 이상적인 태그 크기를 나타냄. 실제 tag 면적이 target area에 가까울수록 reward가 높아짐. target area가 0이 되는 것을 방지하기 위해 최소값을 1.0으로 설정
-    r_area = -std::abs(area - target_area) / std::max(target_area, eps); //실제 tag 면적과 target area의 차이에 대한 패널티. 차이가 클수록 패널티가 커짐. target area로 나누어서 정규화. eps는 0으로 나누는 것을 방지하기 위한 작은 값
+    const Scalar target_area = std::max(stage_target_area_[active_slot], Scalar(1.0)); //stage마다 다른 target area 설정. target area가 0이 되는 것을 방지하기 위해 최소값을 1.0으로 설정
+    const Scalar area_err =
+      std::abs(area - target_area) / std::max(target_area, eps); //target 대비 상대 오차
+    constexpr Scalar kAreaExpScale = 3.0; //클수록 target 근처에서만 높은 보상
+    r_area = std::exp(-kAreaExpScale * area_err);
 
     //std::hypot(a, b) = sqrt(a*a + b*b)
     const Scalar l01 = std::hypot(x1 - x0, y1 - y0); //코너0과 코너1 사이의 거리 (edge length)
@@ -644,8 +648,9 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     const Scalar min_area = tag_min_area_;
     const Scalar e_area_small =
       std::max(Scalar(0.0), (min_area - area) / std::max(min_area, eps)); //태그 면적이 너무 작은 경우에 대한 패널티. 면적이 min_area보다 작을수록 패널티가 커짐. min_area로 나누어서 정규화. eps는 0으로 나누는 것을 방지하기 위한 작은 값
+    r_area_small = -e_area_small;
     const Scalar e_shape =
-      e_edge_opp + e_diag + e_edge_all + e_right_angle + e_area_small;
+      e_edge_opp + e_diag + e_edge_all + e_right_angle;
     r_shape = -e_shape;
   }
   if (!(tag_visible && corners_visible)) {
@@ -707,6 +712,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     tag_center_coeff_ * r_center +
     tag_area_coeff_ * r_area +
     tag_shape_coeff_ * r_shape +
+    tag_area_small_coeff_ * r_area_small +
     tag_smooth_coeff_ * r_smooth +
     r_invisible +
     r_switch;
@@ -718,6 +724,12 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
       stage_, active_tag_idx, static_cast<int>(tag_visible),
       static_cast<int>(corners_visible), observed_area,
       std::max(stage_target_area_[active_slot], Scalar(1.0)));
+    logger_.info(
+      "reward | total=%.4f xy=%.4f vis=%.4f center=%.4f area=%.4f shape=%.4f area_small=%.4f smooth=%.4f invisible=%.4f switch=%.4f",
+      total_reward, landing_w_xy_ * r_xy, tag_vis_coeff_ * r_vis,
+      tag_center_coeff_ * r_center, tag_area_coeff_ * r_area,
+      tag_shape_coeff_ * r_shape, tag_area_small_coeff_ * r_area_small, tag_smooth_coeff_ * r_smooth,
+      r_invisible, r_switch);
   }
 
   return total_reward;
@@ -969,6 +981,9 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     }
     if (cfg["rl"]["tag_shape_coeff"]) {
       tag_shape_coeff_ = cfg["rl"]["tag_shape_coeff"].as<Scalar>();
+    }
+    if (cfg["rl"]["tag_area_small_coeff"]) {
+      tag_area_small_coeff_ = cfg["rl"]["tag_area_small_coeff"].as<Scalar>();
     }
     if (cfg["rl"]["tag_smooth_coeff"]) {
       tag_smooth_coeff_ = cfg["rl"]["tag_smooth_coeff"].as<Scalar>();

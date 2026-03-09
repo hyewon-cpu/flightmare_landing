@@ -116,21 +116,22 @@ rl:
   landing_success_body_rate: 0.3 #body-rate norm needs to be smaller than this to succeed
   landing_success_reward: 100.0
   landing_failure_reward: -10.0
-  log_interval_steps: 10000
+  log_interval_steps: 1000
 
   # tag-based image-space reward
-  tag_vis_coeff: 0.05 # coefficient for tag visibility (binary)
-  tag_center_coeff: 0.08 #reward coefficient for tag center error (squared)
-  tag_area_coeff: 0.05 #reward coefficient for tag area error (squared)
-  tag_shape_coeff: 0.05 #reward coefficient for tag shape error (squared)
-  tag_smooth_coeff: 0.05  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
+  tag_vis_coeff: 0.0 # coefficient for tag visibility (binary)
+  tag_center_coeff: 0.0 #reward coefficient for tag center error (squared)
+  tag_area_coeff: 100 #reward coefficient for tag area error (squared)
+  tag_area_small_coeff: 0.0 #reward coefficient for small tag area (squared)
+  tag_shape_coeff: 0.0 #reward coefficient for tag shape error (squared)
+  tag_smooth_coeff: 0.0  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
   #tag_target_area: 400.0 #target tag area in pixels (corresponding to being centered at the target altitude)
-  tag_min_area: 40.0 #minimum area for partial reward (corresponding to being visible at the max altitude)
+  tag_min_area: 400.0 #minimum area for partial reward (corresponding to being visible at the max altitude)
   stage_switch_enabled: false  # false -> always use stage 0 (tag 0 only)
   stage_miss_threshold: 4  # consecutive misses before switching to next QR stage
   stage_require_next_visible: true  # only switch when next-stage QR is visible
-  stage_switch_bonus: 2.0  # bonus when stage is advanced
-  stage_target_area: [1000.0, 1000.0, 1000.0]  # target projected area for [largest, middle, smallest]
-  invisible_base_penalty: 0.05  # base penalty when active QR is not fully visible
-  invisible_miss_penalty: 0.05  # additional penalty per consecutive miss step
-  invisible_stage_penalty: 0.05  # additional penalty scaled by stage index
+  stage_switch_bonus: 1.0  # bonus when stage is advanced
+  stage_target_area: [3000.0, 5000.0, 5000.0]  # target projected area for [largest, middle, smallest]
+  invisible_base_penalty: 2.0  # base penalty when active QR is not fully visible
+  invisible_miss_penalty: 0.0  # additional penalty per consecutive miss step
+  invisible_stage_penalty: 0.0  # additional penalty scaled by stage index

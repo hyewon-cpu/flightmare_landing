@@ -203,6 +203,7 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar tag_center_coeff_{1.0};
   Scalar tag_area_coeff_{1.0};
   Scalar tag_shape_coeff_{1.0};
+  Scalar tag_area_small_coeff_{1.0};
   Scalar tag_smooth_coeff_{0.01};
   Scalar tag_target_area_{500.0};
   Scalar tag_min_area_{30.0};
