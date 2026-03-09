@@ -550,12 +550,16 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   // update observations
   getObs(obs);
 
+  if (!stage_switch_enabled_) {
+    stage_ = 0;
+  }
+
   // ---------------------- stage-based multi-tag reward (largest -> middle -> smallest)
   const Scalar half_w = static_cast<Scalar>(quaddotenv::kImgWidth - 1) * 0.5;
   const Scalar half_h = static_cast<Scalar>(quaddotenv::kImgHeight - 1) * 0.5;
   const Scalar eps = 1e-6;
   const int active_slot = std::max(0, std::min(stage_, quaddotenv::kNumTags - 1)); //현재 stage에 해당하는 QR코드 인덱스 (0, 1, 2)
-  const int active_tag_idx = tag_order_[active_slot]; //이번 step에서 reward 계산에 사용할 실제 QR 태그 인덱스
+  const int active_tag_idx = stage_switch_enabled_ ? tag_order_[active_slot] : 0; //stage switch 비활성화 시 항상 tag 0 사용
   //tag_order_ :  stage마다 reward 계산에 사용할 QR 태그의 순서를 정의하는 배열. 예를 들어, tag_order_ = {2, 0, 1}이면, stage 0에서는 tag 2가 active_tag_idx가 되고, stage 1에서는 tag 0이 active_tag_idx가 되고, stage 2에서는 tag 1이 active_tag_idx가 됨
   const int active_base = active_tag_idx * quaddotenv::kTagFeat; //active_base : quad_obs_에서 현재 active_tag_idx에 해당하는 QR 코드 관측치의 시작 인덱스. 
   // 예를 들어, active_tag_idx가 1이면, active_base는 1 * kTagFeat가 되어, quad_obs_에서 tag 1의 관측치가 시작되는 인덱스를 가리킴.
@@ -577,11 +581,15 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     //매 step/reset 때 getObs()에서 채운 뒤, 최종 obs로 복사됩니다.
 
   Scalar r_vis = tag_visible ? 1.0 : -1.0;
+  const Scalar xy_error =
+    (quad_state_.p.head<2>() - tag_center_world_[active_tag_idx].head<2>()).norm();
+  Scalar r_xy = -(xy_error * xy_error);
   Scalar r_center = 0.0; // tag center - 이미지 중심 거리. 가까울수록 penalty 줄어듬 
   Scalar r_area = 0.0; // tag area - target area 차이. target area는 stage마다 다름. 실제 tag 면적이 target area에 가까울수록 penalty 줄어듬
   Scalar r_shape = 0.0; // tag shape - edge length 균일성, 대각선 길이 균일성, 직각 정도, 작은 면적 패널티 종합. 실제 tag 모양이 정사각형에 가까울수록 penalty 줄어듬
   Scalar r_smooth = -act.cast<Scalar>().squaredNorm(); // 행동의 크기에 대한 패널티. 작은 행동일수록 penalty 줄어듬 (즉, 행동이 너무 크면 패널티가 커짐)
   Scalar r_invisible = 0.0; // 태그가 보이지 않을 때 패널티. 보이지 않을수록 penalty 커짐
+  Scalar observed_area = -1.0; // active tag 면적(관측 불가 시 -1)
 
   if (tag_visible && corners_visible) {
     const Scalar cx = quad_obs_(active_base + quaddotenv::kCenterX); //tag center의 x 좌표
@@ -604,6 +612,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
       x0 * y1 + x1 * y2 + x2 * y3 + x3 * y0 -
       (y0 * x1 + y1 * x2 + y2 * x3 + y3 * x0); //사각형의 면적을 구하는 공식. (x0,y0), (x1,y1), (x2,y2), (x3,y3)가 사각형의 네 꼭짓점 좌표일 때, 공식에서 나오는 값은 실제 면적의 2배가 되므로, 최종적으로는 절댓값을 취한 후 0.5를 곱하여 실제 면적을 구합니다.
     const Scalar area = std::abs(area_twice) * 0.5;
+    observed_area = area;
     const Scalar target_area = std::max(stage_target_area_[active_slot], Scalar(1.0)); //stage마다 다른 target area 설정. target area는 이상적인 태그 크기를 나타냄. 실제 tag 면적이 target area에 가까울수록 reward가 높아짐. target area가 0이 되는 것을 방지하기 위해 최소값을 1.0으로 설정
     r_area = -std::abs(area - target_area) / std::max(target_area, eps); //실제 tag 면적과 target area의 차이에 대한 패널티. 차이가 클수록 패널티가 커짐. target area로 나누어서 정규화. eps는 0으로 나누는 것을 방지하기 위한 작은 값
 
@@ -656,7 +665,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     miss_count_ = 0;
   }
   Scalar r_switch = 0.0;
-  if (stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
+  if (stage_switch_enabled_ && stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
     bool can_advance = false;
     {
       const bool active_corners_visible =
@@ -693,6 +702,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
 
   Scalar total_reward = 0.0;
   total_reward +=
+    landing_w_xy_ * r_xy +
     tag_vis_coeff_ * r_vis +
     tag_center_coeff_ * r_center +
     tag_area_coeff_ * r_area +
@@ -700,6 +710,15 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     tag_smooth_coeff_ * r_smooth +
     r_invisible +
     r_switch;
+
+  log_counter_++;
+  if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
+    logger_.info(
+      "tag area | stage=%d active_tag=%d visible=%d corners=%d area=%.3f target=%.3f",
+      stage_, active_tag_idx, static_cast<int>(tag_visible),
+      static_cast<int>(corners_visible), observed_area,
+      std::max(stage_target_area_[active_slot], Scalar(1.0)));
+  }
 
   return total_reward;
 }
@@ -719,7 +738,8 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
 
   // Ground plane is assumed around z=3.0.
   if (quad_state_.x(QS::POSZ) <= landing_terminal_z_) {
-    const int terminal_tag_idx = tag_order_[quaddotenv::kNumTags - 1];
+    const int terminal_tag_idx =
+      stage_switch_enabled_ ? tag_order_[quaddotenv::kNumTags - 1] : 0;
     const Scalar xy_error =
       (quad_state_.p.head<2>() - tag_center_world_[terminal_tag_idx].head<2>()).norm();
     const Scalar vxy = quad_state_.v.head<2>().norm();
@@ -959,6 +979,9 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["tag_min_area"]) {
       tag_min_area_ = cfg["rl"]["tag_min_area"].as<Scalar>();
     }
+    if (cfg["rl"]["stage_switch_enabled"]) {
+      stage_switch_enabled_ = cfg["rl"]["stage_switch_enabled"].as<bool>();
+    }
     if (cfg["rl"]["stage_miss_threshold"]) {
       stage_miss_threshold_ = std::max(1, cfg["rl"]["stage_miss_threshold"].as<int>());
     }
@@ -1025,8 +1048,8 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["landing_failure_reward"]) {
       landing_failure_reward_ = cfg["rl"]["landing_failure_reward"].as<Scalar>();
     }
-    if (cfg["rl"]["speed_log_interval_steps"]) {
-      speed_log_interval_steps_ = std::max(1, cfg["rl"]["speed_log_interval_steps"].as<int>());
+    if (cfg["rl"]["log_interval_steps"]) {
+      log_interval_steps_ = std::max(1, cfg["rl"]["log_interval_steps"].as<int>());
     }
   } else {
     return false;

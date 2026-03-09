@@ -2,7 +2,7 @@ quadrotor_env:
   sim_dt: 0.02
   max_t: 10.0
   control_mode: ctbr   # motor | ctbr
-  world_box: [[-30.0, 30.0], [-30.0, 30.0], [0.0, 60.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
+  world_box: [[-1000, 1000.0], [-1000.0, 1000.0], [0.0, 1000.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
   init_pos: [5.5, 6.5, 40.0]                   # base reset position [x,y,z]
   randomize_position_on_reset: false
   randomize_position_scale: 1.0   # scale for position noise around init_pos
@@ -65,6 +65,7 @@ quadrotor_dynamics:
   omega_max: [0.8, 0.8, 0.5]  # body rate constraint (x, y, z) 
 
 rl:
+  #hovering rewards
   pos_coeff: -0.05        # reward coefficient for position
   ori_coeff: -0.05        # reward coefficient for orientation
   lin_vel_coeff: -0.005   # reward coefficient for linear velocity
@@ -72,37 +73,37 @@ rl:
   act_coeff: -0.01  # reward coefficient for control actions
 
   #landing reward coefficients (uv + attitude + gated descent)
-  landing_w_xy: 0.08 #xy position difference penalty weight
-  landing_w_z: 0.05 #z tracking weight when center+tilt gates are satisfied
-  landing_w_vel_xy: 0.03 #xy speed squared penalty weight (applies to near/far if specific keys are absent)
-  landing_w_vel_z: 0.05 #z speed squared penalty weight (applies to near/far if specific keys are absent)
+  landing_w_xy: 0.0 #xy position difference penalty weight
+  #landing_w_z: 0.05 #z tracking weight when center+tilt gates are satisfied
+  #landing_w_vel_xy: 0.03 #xy speed squared penalty weight (applies to near/far if specific keys are absent)
+  #landing_w_vel_z: 0.05 #z speed squared penalty weight (applies to near/far if specific keys are absent)
   #landing_w_vel_xy_near: 0.03
   #landing_w_vel_xy_far: 0.03
-  #landing_w_vel_z_near: 0.03
+  #landing_w_vel_z_near: 0.03 
   #landing_w_vel_z_far: 0.03
   #landing_near_ground_z: 5.0 #switch altitude for near/far velocity weights
 
   #attitude / rate / action smoothness
-  landing_w_tilt: 0.1 #roll/pitch squared penalty
+  #landing_w_tilt: 0.1 #roll/pitch squared penalty
   landing_tilt_hard: 10 #terminate when tilt exceeds this [rad]
-  landing_tilt_hard_penalty: -30.0 #terminal reward for excessive tilt
-  landing_w_yaw: 0.05 #yaw squared penalty
-  landing_w_body_rate: 0.08 #wx/wy squared penalty
-  landing_w_rate_cmd_xy: 0.03 #commanded roll/pitch rate squared penalty
-  landing_w_duv: 0.03 #du/dv squared penalty
-  landing_z_safe_margin: 2.0 #early-descent guard margin above goal z
+  #landing_tilt_hard_penalty: -30.0 #terminal reward for excessive tilt
+  #landing_w_yaw: 0.05 #yaw squared penalty
+  #landing_w_body_rate: 0.08 #wx/wy squared penalty
+  #landing_w_rate_cmd_xy: 0.03 #commanded roll/pitch rate squared penalty
+  #landing_w_duv: 0.03 #du/dv squared penalty
+  #landing_z_safe_margin: 2.0 #early-descent guard margin above goal z
 
   #time
-  landing_time_penalty: 0.002
+  #landing_time_penalty: 0.002
 
   #image coordinate
-  landing_w_img_center: 0.08 #u/v squared penalty weight
-  landing_dot_not_visible_penalty: 0.03 #penalty when dot is out of view
-  landing_center_u_gate: 0.05 #normalized horizontal gate for hold bonus
-  landing_center_v_gate: 0.05 #normalized vertical gate for hold bonus
-  landing_center_hold_bonus: 10 #bonus when target stays centered
+  #landing_w_img_center: 0.08 #u/v squared penalty weight
+  #landing_dot_not_visible_penalty: 0.03 #penalty when dot is out of view
+  #landing_center_u_gate: 0.05 #normalized horizontal gate for hold bonus
+  #landing_center_v_gate: 0.05 #normalized vertical gate for hold bonus
+  #landing_center_hold_bonus: 10 #bonus when target stays centered
 
-  landing_w_early_descend: 0.02 #penalty weigt for descending early while not being centered/leveled
+  #landing_w_early_descend: 0.02 #penalty weigt for descending early while not being centered/leveled
 
 
 
@@ -115,20 +116,21 @@ rl:
   landing_success_body_rate: 0.3 #body-rate norm needs to be smaller than this to succeed
   landing_success_reward: 100.0
   landing_failure_reward: -10.0
-  speed_log_interval_steps: 10000
+  log_interval_steps: 10000
 
   # tag-based image-space reward
-  tag_vis_coeff: 1.0 #reward coefficient for tag visibility (binary)
-  tag_center_coeff: 1.0 #reward coefficient for tag center error (squared)
-  tag_area_coeff: 1.5 #reward coefficient for tag area error (squared)
-  tag_shape_coeff: 1.5 #reward coefficient for tag shape error (squared)
-  tag_smooth_coeff: 0.01  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
+  tag_vis_coeff: 0.05 # coefficient for tag visibility (binary)
+  tag_center_coeff: 0.08 #reward coefficient for tag center error (squared)
+  tag_area_coeff: 0.05 #reward coefficient for tag area error (squared)
+  tag_shape_coeff: 0.05 #reward coefficient for tag shape error (squared)
+  tag_smooth_coeff: 0.05  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
   #tag_target_area: 400.0 #target tag area in pixels (corresponding to being centered at the target altitude)
   tag_min_area: 40.0 #minimum area for partial reward (corresponding to being visible at the max altitude)
+  stage_switch_enabled: false  # false -> always use stage 0 (tag 0 only)
   stage_miss_threshold: 4  # consecutive misses before switching to next QR stage
   stage_require_next_visible: true  # only switch when next-stage QR is visible
   stage_switch_bonus: 2.0  # bonus when stage is advanced
-  stage_target_area: [50.0, 50.0, 50.0]  # target projected area for [largest, middle, smallest]
-  invisible_base_penalty: 0.5  # base penalty when active QR is not fully visible
-  invisible_miss_penalty: 0.2  # additional penalty per consecutive miss step
-  invisible_stage_penalty: 0.2  # additional penalty scaled by stage index
+  stage_target_area: [1000.0, 1000.0, 1000.0]  # target projected area for [largest, middle, smallest]
+  invisible_base_penalty: 0.05  # base penalty when active QR is not fully visible
+  invisible_miss_penalty: 0.05  # additional penalty per consecutive miss step
+  invisible_stage_penalty: 0.05  # additional penalty scaled by stage index

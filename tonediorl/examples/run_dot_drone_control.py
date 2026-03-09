@@ -87,8 +87,8 @@ def parser():
                    help="Eval frequency (timesteps per env)")
     parser.add_argument('--n_eval_episodes', type=int, default=5,
                    help="Number of eval episodes")
-    parser.add_argument('--checkpoint_freq', type=int, default=50_000, 
-                   help="Checkpoint save frequency (timesteps per env). Default is 50,000 steps.")
+    parser.add_argument('--checkpoint_freq', type=int, default=5_000_000, 
+                   help="Checkpoint save frequency in total timesteps. Default is 50,000.")
 
     # wandb
     parser.add_argument('--wandb', type=int, default=1, help="Enable wandb logging")
@@ -373,6 +373,14 @@ def main():
         n_envs = env.num_envs
         n_steps = 250
         batch_size = n_steps * n_envs  # emulate nminibatches=1
+        checkpoint_freq_total = max(1, int(args.checkpoint_freq))
+        checkpoint_freq_calls = max(1, checkpoint_freq_total // max(1, int(n_envs)))
+        actual_checkpoint_freq_total = checkpoint_freq_calls * int(n_envs)
+        print(
+            f"[Train] checkpoint_freq(total)={checkpoint_freq_total}, "
+            f"num_envs={n_envs} -> callback save_freq={checkpoint_freq_calls} "
+            f"(actual total interval={actual_checkpoint_freq_total})"
+        )
 
  
 
@@ -417,7 +425,7 @@ def main():
             gamma=0.99,
             gae_lambda=0.95,      # PPO2 lam
             clip_range=0.2,
-            ent_coef=0.0,
+            ent_coef=0.01,
             vf_coef=0.5,
             max_grad_norm=0.5,
             tensorboard_log=saver.data_dir,
@@ -456,30 +464,27 @@ def main():
         else:
             print("[Train] Unity camera mode: EvalCallback(best model save) is disabled.")
         
-        # Add observation normalization callbacks (only if normalization is enabled)
+        # Add observation normalization update callback only when enabled.
+        # (Checkpoint callback itself is always enabled regardless of use_obs_norm.)
         if use_obs_norm:
-            # Add observation normalization update callback
-            # This automatically calls update_rms() at the end of each rollout
             callback_list.append(ObsNormUpdateCallback())
-            
-            # Add checkpoint callback that also saves normalization statistics
             checkpoint_callback = CheckpointCallbackWithRMS(
-                save_freq=args.checkpoint_freq,
+                save_freq=checkpoint_freq_calls,
                 save_path=os.path.join(saver.data_dir, "checkpoints"),
                 name_prefix="ppo_model",
                 verbose=1,
             )
-            callback_list.append(checkpoint_callback)
+            print("[Train] Checkpoint callback: CheckpointCallbackWithRMS")
         else:
-            # Use regular CheckpointCallback when normalization is disabled
             from stable_baselines3.common.callbacks import CheckpointCallback
             checkpoint_callback = CheckpointCallback(
-                save_freq=args.checkpoint_freq,
+                save_freq=checkpoint_freq_calls,
                 save_path=os.path.join(saver.data_dir, "checkpoints"),
                 name_prefix="ppo_model",
                 verbose=1,
             )
-            callback_list.append(checkpoint_callback)
+            print("[Train] Checkpoint callback: CheckpointCallback")
+        callback_list.append(checkpoint_callback)
 
         if args.viz_scene:
             callback_list.append(
@@ -546,7 +551,7 @@ def main():
 
     else:
         # Test mode (simple loop)
-        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/best_model/best_model.zip')
+        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints/ppo_model_25000000_steps.zip') 
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled

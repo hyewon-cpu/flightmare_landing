@@ -151,9 +151,9 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar landing_success_body_rate_{0.25};
   Scalar landing_success_reward_{10.0};
   Scalar landing_failure_reward_{-10.0};
-  Scalar speed_log_sum_{0.0};
-  int speed_log_counter_{0};
-  int speed_log_interval_steps_{200};
+  Scalar log_sum_{0.0};
+  int log_counter_{0};
+  int log_interval_steps_{200};
 
   // action and observation normalization (for learning)
   Vector<quaddotenv::kNAct> act_mean_;
@@ -175,6 +175,7 @@ class QuadrotorDotEnv final : public EnvBase {
   std::array<int, quaddotenv::kNumTags> tag_order_{{0, 1, 2}};
   int stage_{0};
   int miss_count_{0};
+  bool stage_switch_enabled_{true};
   int stage_miss_threshold_{4};
   bool stage_require_next_visible_{true};
   Scalar stage_switch_bonus_{2.0};

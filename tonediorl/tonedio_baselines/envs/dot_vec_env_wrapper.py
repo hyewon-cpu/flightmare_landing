@@ -48,6 +48,7 @@ class DotFlightEnvVec(VecEnv):
             and self._dot_uv_dim >= self.DOT_UV_DIM
             and self._dot_uv_dim % self.DOT_UV_DIM == 0
         )
+        self._policy_dot_uv_dim = self.DOT_UV_DIM if self._is_dot_image_obs else self._dot_uv_dim
 
         if (self._is_image_obs or self._is_dot_image_obs) and use_obs_norm:
             if self._is_dot_image_obs:
@@ -65,12 +66,10 @@ class DotFlightEnvVec(VecEnv):
                 dtype=np.uint8,
             )
         elif self._is_dot_image_obs:
-            # Policy sees concatenated tag features:
-            # [tag0(11), tag1(11), ...], where each tag is
-            # [center(2), corners(8), tag_id(1)].
+            # Policy sees only the first tag features: tag0(11)
             self._observation_space = spaces.Box(
-                low=-np.inf * np.ones(self._dot_uv_dim, dtype=np.float32),
-                high=np.inf * np.ones(self._dot_uv_dim, dtype=np.float32),
+                low=-np.inf * np.ones(self._policy_dot_uv_dim, dtype=np.float32),
+                high=np.inf * np.ones(self._policy_dot_uv_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         else:
@@ -115,6 +114,7 @@ class DotFlightEnvVec(VecEnv):
             f"[FlightEnvVecSB3] num_envs={self._num_envs}, "
             f"raw_obs_dim={self.num_obs}, policy_obs_shape={self._observation_space.shape}, "
             f"dot_uv_dim={self._dot_uv_dim if self._is_dot_image_obs else 0}, "
+            f"policy_dot_uv_dim={self._policy_dot_uv_dim if self._is_dot_image_obs else 0}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}"
         )
 
@@ -368,7 +368,7 @@ class DotFlightEnvVec(VecEnv):
                 self._num_envs, self.IMG_HEIGHT, self.IMG_WIDTH, self.IMG_CHANNELS
             ).astype(np.uint8)
         if self._is_dot_image_obs:
-            return obs[:, :self._dot_uv_dim].astype(np.float32)
+            return obs[:, :self._policy_dot_uv_dim].astype(np.float32)
         return obs.astype(np.float32)
 
 
@@ -383,7 +383,7 @@ class DotFlightEnvVec(VecEnv):
         if self._is_image_obs:
             return obs.astype(np.float32)
         if self._is_dot_image_obs:
-            return obs[:, :self._dot_uv_dim].astype(np.float32)
+            return obs[:, :self._policy_dot_uv_dim].astype(np.float32)
         if not self.use_obs_norm:
             return obs.astype(np.float32)
         return self._normalize_obs(obs, self.obs_rms).astype(np.float32)
