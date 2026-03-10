@@ -303,9 +303,11 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
   prev_uv_valid_ = false;
   stage_ = 0;
   miss_count_ = 0;
+  last_visible_area_ = -1.0;
+  miss_start_prev_area_ = -1.0;
 
   // deterministic base state from YAML
-  quad_state_.x(QS::POSX) = init_pos_(0) + spawn_offset_(0);
+  quad_state_.x(QS::POSX) = init_pos_(0) + spawn_offset_(0); //spawn_offset_ : hpp 파일에 정의됨. 0,0,0이 기본값. setSpawnOffset 으로 변경 가능 
   quad_state_.x(QS::POSY) = init_pos_(1) + spawn_offset_(1);
   quad_state_.x(QS::POSZ) = init_pos_(2) + spawn_offset_(2);
   quad_state_.x(QS::ATTW) = 1.0;
@@ -318,6 +320,9 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
     // reset position around init_pos
     if (randomize_position_on_reset_) {
       quad_state_.x(QS::POSX) += uniform_dist_(random_gen_) * randomize_position_scale_;
+       //random_gen_ : env_base.hpp 에 정의된 난수 생성기. 균등분포 uniform_dist_{-1.0,1.0} 로 정의됨 
+       //즉, [-1.1] 범위의 난수를 하나 뽑아서 위치 램덤하게 함. 
+       //randomize_position_scale_ : yaml에서 설정 가능. 위치 램덤하게 하는 정도. 1 이 기본값 
       quad_state_.x(QS::POSY) += uniform_dist_(random_gen_) * randomize_position_scale_;
       quad_state_.x(QS::POSZ) += uniform_dist_(random_gen_) * randomize_position_scale_;
     }
@@ -531,6 +536,33 @@ bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
   return true;
 }
 
+void QuadrotorDotEnv::updateExtraInfo() {
+  quadrotor_ptr_->getState(&quad_state_);
+  extra_info_["drone_pos_x"] = quad_state_.x(QS::POSX);
+  extra_info_["drone_pos_y"] = quad_state_.x(QS::POSY);
+  extra_info_["drone_pos_z"] = quad_state_.x(QS::POSZ);
+  extra_info_["drone_vel_x"] = quad_state_.x(QS::VELX);
+  extra_info_["drone_vel_y"] = quad_state_.x(QS::VELY);
+  extra_info_["drone_vel_z"] = quad_state_.x(QS::VELZ);
+
+  extra_info_["reward_total"] = last_total_reward_;
+  extra_info_["reward_xy"] = last_r_xy_;
+  extra_info_["reward_vis"] = last_r_vis_;
+  extra_info_["reward_center"] = last_r_center_;
+  extra_info_["reward_area"] = last_r_area_;
+  extra_info_["reward_shape"] = last_r_shape_;
+  extra_info_["reward_shape2"] = last_r_shape2_;
+  extra_info_["reward_area_small"] = last_r_area_small_;
+  extra_info_["reward_smooth"] = last_r_smooth_;
+  extra_info_["reward_invisible"] = last_r_invisible_;
+  extra_info_["reward_switch"] = last_r_switch_;
+  extra_info_["tag_visible"] = last_tag_visible_ ? 1.0f : 0.0f;
+  extra_info_["corners_visible"] = last_corners_visible_ ? 1.0f : 0.0f;
+  extra_info_["observed_area"] = last_observed_area_;
+  extra_info_["stage"] = static_cast<float>(stage_);
+  extra_info_["miss_count"] = static_cast<float>(miss_count_);
+}
+
 Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   quad_act_ = act.cwiseProduct(act_std_) + act_mean_;
   cmd_.t += sim_dt_;
@@ -587,6 +619,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   Scalar r_center = 0.0; // tag center - 이미지 중심 거리. 가까울수록 penalty 줄어듬 
   Scalar r_area = 0.0; // tag area 지수형 보상. target area에 가까울수록 1에 가까움
   Scalar r_shape = 0.0; // tag shape - edge length 균일성, 대각선 길이 균일성, 직각 정도, 작은 면적 패널티 종합. 실제 tag 모양이 정사각형에 가까울수록 penalty 줄어듬
+  Scalar r_shape2 = 0.0; // tag axis alignment - 변이 이미지 x/y 축과 평행할수록 보상
   Scalar r_area_small = 0.0; // tag_min_area 미만일 때만 적용되는 별도 패널티
   Scalar r_smooth = -act.cast<Scalar>().squaredNorm(); // 행동의 크기에 대한 패널티. 작은 행동일수록 penalty 줄어듬 (즉, 행동이 너무 크면 패널티가 커짐)
   Scalar r_invisible = 0.0; // 태그가 보이지 않을 때 패널티. 보이지 않을수록 penalty 커짐
@@ -614,6 +647,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
       (y0 * x1 + y1 * x2 + y2 * x3 + y3 * x0); //사각형의 면적을 구하는 공식. (x0,y0), (x1,y1), (x2,y2), (x3,y3)가 사각형의 네 꼭짓점 좌표일 때, 공식에서 나오는 값은 실제 면적의 2배가 되므로, 최종적으로는 절댓값을 취한 후 0.5를 곱하여 실제 면적을 구합니다.
     const Scalar area = std::abs(area_twice) * 0.5;
     observed_area = area;
+    last_visible_area_ = area;
     const Scalar target_area = std::max(stage_target_area_[active_slot], Scalar(1.0)); //stage마다 다른 target area 설정. target area가 0이 되는 것을 방지하기 위해 최소값을 1.0으로 설정
     const Scalar area_err =
       std::abs(area - target_area) / std::max(target_area, eps); //target 대비 상대 오차
@@ -627,9 +661,14 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     const Scalar l30 = std::hypot(x0 - x3, y0 - y3); //코너3과 코너0 사이의 거리 (edge length)
     const Scalar d02 = std::hypot(x2 - x0, y2 - y0); //코너0과 코너2 사이의 거리 (대각선 길이)
     const Scalar d13 = std::hypot(x3 - x1, y3 - y1); //코너1과 코너3 사이의 거리 (대각선 길이)
+    const Scalar e_edge_adj =
+      std::abs(l01 - l12) / (l01 + l12 + eps) +
+      std::abs(l12 - l23) / (l12 + l23 + eps) +
+      std::abs(l23 - l30) / (l23 + l30 + eps) +
+      std::abs(l30 - l01) / (l30 + l01 + eps); //인접 edge 길이의 차이에 대한 패널티. 인접 edge 길이가 비슷할수록 패널티가 작아짐. eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar e_edge_opp =
       std::abs(l01 - l23) / (l01 + l23 + eps) +
-      std::abs(l12 - l30) / (l12 + l30 + eps); //반대편 edge 길이의 차이에 대한 패널티. l01과 l23는 서로 마주보는 edge, l12와 l30도 서로 마주보는 edge. 마주보는 edge 길이가 비슷할수록 패널티가 작아짐. eps는 0으로 나누는 것을 방지하기 위한 작은 값
+      std::abs(l12 - l30) / (l12 + l30 + eps); //반대편 edge 길이의 차이에 대한 패널티. 마주보는 edge 길이가 비슷할수록 패널티가 작아짐. eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar e_diag = std::abs(d02 - d13) / (d02 + d13 + eps); //대각선 길이의 차이에 대한 패널티. d02와 d13은 서로 마주보는 대각선. 마주보는 대각선 길이가 비슷할수록 패널티가 작아짐. eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar l_mean = (l01 + l12 + l23 + l30) * Scalar(0.25); //edge 길이의 평균. edge 길이들이 평균에 가까울수록 패널티가 작아짐. eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar e_edge_all =
@@ -650,17 +689,41 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
       std::max(Scalar(0.0), (min_area - area) / std::max(min_area, eps)); //태그 면적이 너무 작은 경우에 대한 패널티. 면적이 min_area보다 작을수록 패널티가 커짐. min_area로 나누어서 정규화. eps는 0으로 나누는 것을 방지하기 위한 작은 값
     r_area_small = -e_area_small;
     const Scalar e_shape =
-      e_edge_opp + e_diag + e_edge_all + e_right_angle;
+      e_edge_adj + e_edge_opp + e_diag + e_edge_all + e_right_angle;
     r_shape = -e_shape;
+
+    // axis alignment: each edge should be parallel to either image x-axis or y-axis
+    const Scalar u01x = v01x / (l01 + eps), u01y = v01y / (l01 + eps); 
+    //v01x : 코너0에서 코너1로 향하는 벡터의 x 성분. 
+    //l01 : 코너0에서 코너1 사이의 거리 (edge length)
+    //u01x, u01y : 코너0에서 코너1로 향하는 단위 벡터의 x와 y 성분. edge 벡터를 edge 길이로 나누어서 정규화. eps는 0으로 나누는 것을 방지
+    const Scalar u12x = v12x / (l12 + eps), u12y = v12y / (l12 + eps);
+    const Scalar u23x = v23x / (l23 + eps), u23y = v23y / (l23 + eps);
+    const Scalar u30x = v30x / (l30 + eps), u30y = v30y / (l30 + eps);
+    // edge 01 is explicitly encouraged to align with image x-axis
+    const Scalar a01 = std::abs(u01y); //edge 01 -> x-axis 평행 한지. 0 일수록 좋음 
+    const Scalar a12 = std::abs(u12x); // edge 12 -> y-axis 평행 하지 
+    const Scalar a23 = std::abs(u23y); // edge 23 -> x-axis 평행 한지
+    const Scalar a30 = std::abs(u30x); // edge 30 -> y-axis 평행 한지 
+    const Scalar e_axis_align = (a01 + a12 + a23 + a30) * Scalar(0.25);
+    r_shape2 = -e_axis_align;
   }
   if (!(tag_visible && corners_visible)) {
+    if (miss_count_ == 0) {
+      // area on the last visible step before this invisible streak starts
+      miss_start_prev_area_ = last_visible_area_;
+    }
     const Scalar miss_steps = static_cast<Scalar>(miss_count_ + 1); //태그가 보이지 않는 상태가 몇 step 지속되었는지를 나타내는 값. miss_count_는 현재까지 태그가 보이지 않는 상태가 지속된 step 수를 카운트하는 변수. 여기에 1을 더하는 이유는 현재 step도 포함하기 위함. 태그가 보이지 않는 상태가 지속될수록 miss_steps의 값이 커지며, 이를 통해 r_invisible에 점점 더 큰 패널티를 주게 됨
     const Scalar stage_scale = static_cast<Scalar>(stage_); //현재 stage에 대한 스케일 값. stage_는 현재 stage를 나타내는 변수. 이 값을 사용하여 r_invisible에 stage에 따라 다른 패널티를 주게 됨
-    r_invisible = -(
+    const Scalar invisible_cost = (
       invisible_base_penalty_ +
       invisible_miss_penalty_ * miss_steps +
       invisible_stage_penalty_ * stage_scale
     );
+    r_invisible = -invisible_cost;
+    if (miss_start_prev_area_ >= invisible_positive_area_threshold_) {
+      r_invisible = invisible_cost;
+    }
   }
 
   // keep miss_count_ for invisible penalties
@@ -668,6 +731,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     miss_count_++;
   } else {
     miss_count_ = 0;
+    miss_start_prev_area_ = -1.0;
   }
   Scalar r_switch = 0.0;
   if (stage_switch_enabled_ && stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
@@ -701,6 +765,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     if (can_advance) {
       stage_++;
       miss_count_ = 0; //stage가 바뀌면 태그가 보이지 않는 상태도 초기화
+      miss_start_prev_area_ = -1.0;
       r_switch = stage_switch_bonus_;   
     }
   }
@@ -712,23 +777,43 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     tag_center_coeff_ * r_center +
     tag_area_coeff_ * r_area +
     tag_shape_coeff_ * r_shape +
+    tag_shape2_coeff_ * r_shape2 +
     tag_area_small_coeff_ * r_area_small +
     tag_smooth_coeff_ * r_smooth +
     r_invisible +
     r_switch;
 
+  last_total_reward_ = total_reward;
+  last_r_xy_ = landing_w_xy_ * r_xy;
+  last_r_vis_ = tag_vis_coeff_ * r_vis;
+  last_r_center_ = tag_center_coeff_ * r_center;
+  last_r_area_ = tag_area_coeff_ * r_area;
+  last_r_shape_ = tag_shape_coeff_ * r_shape;
+  last_r_shape2_ = tag_shape2_coeff_ * r_shape2;
+  last_r_area_small_ = tag_area_small_coeff_ * r_area_small;
+  last_r_smooth_ = tag_smooth_coeff_ * r_smooth;
+  last_r_invisible_ = r_invisible;
+  last_r_switch_ = r_switch;
+  last_observed_area_ = observed_area;
+  last_tag_visible_ = tag_visible;
+  last_corners_visible_ = corners_visible;
+
   log_counter_++;
   if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
+    logger_.info(
+      "quad pos | x=%.3f y=%.3f z=%.3f",
+      quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ));
     logger_.info(
       "tag area | stage=%d active_tag=%d visible=%d corners=%d area=%.3f target=%.3f",
       stage_, active_tag_idx, static_cast<int>(tag_visible),
       static_cast<int>(corners_visible), observed_area,
       std::max(stage_target_area_[active_slot], Scalar(1.0)));
     logger_.info(
-      "reward | total=%.4f xy=%.4f vis=%.4f center=%.4f area=%.4f shape=%.4f area_small=%.4f smooth=%.4f invisible=%.4f switch=%.4f",
+      "reward | total=%.4f xy=%.4f vis=%.4f center=%.4f area=%.4f shape=%.4f shape2=%.4f area_small=%.4f smooth=%.4f invisible=%.4f switch=%.4f",
       total_reward, landing_w_xy_ * r_xy, tag_vis_coeff_ * r_vis,
       tag_center_coeff_ * r_center, tag_area_coeff_ * r_area,
-      tag_shape_coeff_ * r_shape, tag_area_small_coeff_ * r_area_small, tag_smooth_coeff_ * r_smooth,
+      tag_shape_coeff_ * r_shape, tag_shape2_coeff_ * r_shape2,
+      tag_area_small_coeff_ * r_area_small, tag_smooth_coeff_ * r_smooth,
       r_invisible, r_switch);
   }
 
@@ -736,6 +821,18 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
 }
 
 bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
+  const bool hit_world_box =
+    (quad_state_.x(QS::POSX) <= world_box_(0, 0)+0.001) ||
+    (quad_state_.x(QS::POSX) >= world_box_(0, 1)-0.001) ||
+    (quad_state_.x(QS::POSY) <= world_box_(1, 0)+0.001) ||
+    (quad_state_.x(QS::POSY) >= world_box_(1, 1)-0.001) ||
+    (quad_state_.x(QS::POSZ) <= world_box_(2, 0)+0.001) ||
+    (quad_state_.x(QS::POSZ) >= world_box_(2, 1)-0.001);
+  if (hit_world_box) {
+    reward = landing_failure_reward_;
+    return true;
+  }
+
   // Early terminate on excessive tilt (flip-like behavior).
   {
     const Vector<3> euler_zyx =
@@ -982,15 +1079,17 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["tag_shape_coeff"]) {
       tag_shape_coeff_ = cfg["rl"]["tag_shape_coeff"].as<Scalar>();
     }
+    if (cfg["rl"]["tag_shape2_coeff"]) {
+      tag_shape2_coeff_ = cfg["rl"]["tag_shape2_coeff"].as<Scalar>();
+    }
     if (cfg["rl"]["tag_area_small_coeff"]) {
       tag_area_small_coeff_ = cfg["rl"]["tag_area_small_coeff"].as<Scalar>();
     }
     if (cfg["rl"]["tag_smooth_coeff"]) {
       tag_smooth_coeff_ = cfg["rl"]["tag_smooth_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["tag_target_area"]) {
-      tag_target_area_ = cfg["rl"]["tag_target_area"].as<Scalar>();
-    }
+ 
+    
     if (cfg["rl"]["tag_min_area"]) {
       tag_min_area_ = cfg["rl"]["tag_min_area"].as<Scalar>();
     }
@@ -1024,6 +1123,10 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["invisible_stage_penalty"]) {
       invisible_stage_penalty_ = std::max(Scalar(0.0),
                                           cfg["rl"]["invisible_stage_penalty"].as<Scalar>());
+    }
+    if (cfg["rl"]["invisible_positive_area_threshold"]) {
+      invisible_positive_area_threshold_ = std::max(
+        Scalar(0.0), cfg["rl"]["invisible_positive_area_threshold"].as<Scalar>());
     }
     if (cfg["rl"]["landing_center_u_gate"]) {
       landing_center_u_gate_ = cfg["rl"]["landing_center_u_gate"].as<Scalar>();

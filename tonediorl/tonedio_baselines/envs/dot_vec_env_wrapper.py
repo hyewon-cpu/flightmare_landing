@@ -26,7 +26,7 @@ class DotFlightEnvVec(VecEnv):
     IMG_CHANNELS = 3
     DOT_UV_DIM = 11
 
-    def __init__(self, impl, use_obs_norm: bool = True):
+    def __init__(self, impl, use_obs_norm: bool = True, include_prev_action: bool = False):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
         :param use_obs_norm: (bool) Whether to use observation normalization. 
@@ -34,6 +34,7 @@ class DotFlightEnvVec(VecEnv):
         """
         self.wrapper = impl
         self.use_obs_norm = use_obs_norm
+        self.include_prev_action = bool(include_prev_action)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -49,6 +50,7 @@ class DotFlightEnvVec(VecEnv):
             and self._dot_uv_dim % self.DOT_UV_DIM == 0
         )
         self._policy_dot_uv_dim = self.DOT_UV_DIM if self._is_dot_image_obs else self._dot_uv_dim
+        self._append_prev_action = self.include_prev_action and (not self._is_image_obs)
 
         if (self._is_image_obs or self._is_dot_image_obs) and use_obs_norm:
             if self._is_dot_image_obs:
@@ -67,15 +69,17 @@ class DotFlightEnvVec(VecEnv):
             )
         elif self._is_dot_image_obs:
             # Policy sees only the first tag features: tag0(11)
+            policy_dim = self._policy_dot_uv_dim + (self.num_acts if self._append_prev_action else 0)
             self._observation_space = spaces.Box(
-                low=-np.inf * np.ones(self._policy_dot_uv_dim, dtype=np.float32),
-                high=np.inf * np.ones(self._policy_dot_uv_dim, dtype=np.float32),
+                low=-np.inf * np.ones(policy_dim, dtype=np.float32),
+                high=np.inf * np.ones(policy_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         else:
+            policy_dim = self.num_obs + (self.num_acts if self._append_prev_action else 0)
             self._observation_space = spaces.Box(
-                low=-np.inf * np.ones(self.num_obs, dtype=np.float32),
-                high=np.inf * np.ones(self.num_obs, dtype=np.float32),
+                low=-np.inf * np.ones(policy_dim, dtype=np.float32),
+                high=np.inf * np.ones(policy_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         self._action_space = spaces.Box(
@@ -92,6 +96,7 @@ class DotFlightEnvVec(VecEnv):
         self._observation = np.zeros((self._num_envs, self.num_obs), dtype=np.float32)
         self._reward = np.zeros((self._num_envs,), dtype=np.float32)
         self._done = np.zeros((self._num_envs,), dtype=bool)
+        self._prev_actions = np.zeros((self._num_envs, self.num_acts), dtype=np.float32)
 
         self._extraInfoNames = list(self.wrapper.getExtraInfoNames())
         self._extraInfo = np.zeros((self._num_envs, len(self._extraInfoNames)), dtype=np.float32)
@@ -115,7 +120,8 @@ class DotFlightEnvVec(VecEnv):
             f"raw_obs_dim={self.num_obs}, policy_obs_shape={self._observation_space.shape}, "
             f"dot_uv_dim={self._dot_uv_dim if self._is_dot_image_obs else 0}, "
             f"policy_dot_uv_dim={self._policy_dot_uv_dim if self._is_dot_image_obs else 0}, "
-            f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}"
+            f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
+            f"include_prev_action={self._append_prev_action}"
         )
 
     def seed(self, seed=0):
@@ -160,6 +166,7 @@ class DotFlightEnvVec(VecEnv):
     def reset(self):
         self._reward[:] = 0.0
         self._done[:] = False
+        self._prev_actions[:] = 0.0
         # Flightmare fills the provided obs buffer
         self.wrapper.reset(self._observation)
         # Update normalization statistics (if enabled)
@@ -259,6 +266,12 @@ class DotFlightEnvVec(VecEnv):
             ]
         else:
             infos = [{} for _ in range(self._num_envs)]
+
+        # Returned observation can include previous action (action from the just-finished step).
+        if self._append_prev_action:
+            self._prev_actions = self._actions.copy().astype(np.float32)
+            if np.any(self._done):
+                self._prev_actions[self._done] = 0.0
 
         # Return normalized observation
         obs = self._format_obs(self.normalize_obs(self._observation))
@@ -368,8 +381,14 @@ class DotFlightEnvVec(VecEnv):
                 self._num_envs, self.IMG_HEIGHT, self.IMG_WIDTH, self.IMG_CHANNELS
             ).astype(np.uint8)
         if self._is_dot_image_obs:
-            return obs[:, :self._policy_dot_uv_dim].astype(np.float32)
-        return obs.astype(np.float32)
+            policy_obs = obs[:, :self._policy_dot_uv_dim].astype(np.float32)
+            if self._append_prev_action:
+                policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+            return policy_obs
+        policy_obs = obs.astype(np.float32)
+        if self._append_prev_action:
+            policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+        return policy_obs
 
 
     def normalize_obs(self, obs: np.ndarray) -> np.ndarray:

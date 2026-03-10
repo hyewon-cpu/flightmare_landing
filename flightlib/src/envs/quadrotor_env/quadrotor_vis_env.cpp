@@ -403,6 +403,18 @@ Scalar QuadrotorVisEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
 }
 
 bool QuadrotorVisEnv::isTerminalState(Scalar &reward) {
+  const bool hit_world_box =
+    (quad_state_.x(QS::POSX) <= world_box_(0, 0)) ||
+    (quad_state_.x(QS::POSX) >= world_box_(0, 1)) ||
+    (quad_state_.x(QS::POSY) <= world_box_(1, 0)) ||
+    (quad_state_.x(QS::POSY) >= world_box_(1, 1)) ||
+    (quad_state_.x(QS::POSZ) <= world_box_(2, 0)) ||
+    (quad_state_.x(QS::POSZ) >= world_box_(2, 1));
+  if (hit_world_box) {
+    reward = -0.02;
+    return true;
+  }
+
   if (quad_state_.x(QS::POSZ) <= 0.02) {
     reward = -0.02;
     return true;

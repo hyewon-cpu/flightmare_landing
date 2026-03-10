@@ -83,6 +83,7 @@ class QuadrotorDotEnv final : public EnvBase {
   bool getAct(Command *const cmd) const;
 
   // - auxiliar functions
+  void updateExtraInfo() override;
   bool isTerminalState(Scalar &reward) override;
   void addObjectsToUnity(std::shared_ptr<UnityBridge> bridge);
 
@@ -183,6 +184,9 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar invisible_base_penalty_{0.5};
   Scalar invisible_miss_penalty_{0.2};
   Scalar invisible_stage_penalty_{0.2};
+  Scalar invisible_positive_area_threshold_{1000.0};
+  Scalar last_visible_area_{-1.0};
+  Scalar miss_start_prev_area_{-1.0};
   Vector<3> B_r_BC_{(Vector<3>() << 0.0, 0.0, 0.3).finished()};
   Matrix<3, 3> R_BC_{Matrix<3, 3>::Identity()};
   Scalar fx_{0.0};
@@ -203,10 +207,24 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar tag_center_coeff_{1.0};
   Scalar tag_area_coeff_{1.0};
   Scalar tag_shape_coeff_{1.0};
+  Scalar tag_shape2_coeff_{0.0};
   Scalar tag_area_small_coeff_{1.0};
   Scalar tag_smooth_coeff_{0.01};
-  Scalar tag_target_area_{500.0};
   Scalar tag_min_area_{30.0};
+  Scalar last_total_reward_{0.0};
+  Scalar last_r_xy_{0.0};
+  Scalar last_r_vis_{0.0};
+  Scalar last_r_center_{0.0};
+  Scalar last_r_area_{0.0};
+  Scalar last_r_shape_{0.0};
+  Scalar last_r_shape2_{0.0};
+  Scalar last_r_area_small_{0.0};
+  Scalar last_r_smooth_{0.0};
+  Scalar last_r_invisible_{0.0};
+  Scalar last_r_switch_{0.0};
+  Scalar last_observed_area_{-1.0};
+  bool last_tag_visible_{false};
+  bool last_corners_visible_{false};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;
