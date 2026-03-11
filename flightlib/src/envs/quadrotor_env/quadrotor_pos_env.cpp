@@ -1,4 +1,4 @@
-#include "flightlib/envs/quadrotor_env/quadrotor_dot_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_pos_env.hpp"
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
 #include <utility>
@@ -75,11 +75,11 @@ Scalar estimateTagScale(const Matrix<3, 4> &corners) {
 
 }  // namespace
 
-QuadrotorDotEnv::QuadrotorDotEnv()
+QuadrotorPosEnv::QuadrotorPosEnv()
   : QuadrotorDotEnv(getenv("FLIGHTMARE_PATH") +
                     std::string("/flightlib/configs/quadrotor_dot_env.yaml")) {}
 
-QuadrotorDotEnv::QuadrotorDotEnv(const std::string &cfg_path)
+QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
   : EnvBase()  {
   // load configuration file
   YAML::Node cfg_ = YAML::LoadFile(cfg_path);
@@ -269,9 +269,9 @@ QuadrotorDotEnv::QuadrotorDotEnv(const std::string &cfg_path)
   loadParam(cfg_);
 }
 
-QuadrotorDotEnv::~QuadrotorDotEnv() {}
+QuadrotorPosEnv::~QuadrotorPosEnv() {}
 
-bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
+bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_state_.setZero();
   quad_obs_.setZero();
   quad_obs_.segment<quaddotenv::kTagObs>(quaddotenv::kObs).setConstant(-1.0);
@@ -357,7 +357,7 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
   return true;
 }
 
-bool QuadrotorDotEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
+bool QuadrotorPosEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
                                                Ref<Vector<2>> pixel_uv,
                                                bool *in_front,
                                                bool *in_image) const {
@@ -401,7 +401,7 @@ bool QuadrotorDotEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
   return true;
 }
 
-bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
+bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
   quadrotor_ptr_->getState(&quad_state_);
 
   if (!hold_last_tag_obs_) {
@@ -519,7 +519,7 @@ bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
   return true;
 }
 
-void QuadrotorDotEnv::updateExtraInfo() {
+void QuadrotorPosEnv::updateExtraInfo() {
   quadrotor_ptr_->getState(&quad_state_);
   extra_info_["drone_pos_x"] = quad_state_.x(QS::POSX);
   extra_info_["drone_pos_y"] = quad_state_.x(QS::POSY);
@@ -548,7 +548,7 @@ void QuadrotorDotEnv::updateExtraInfo() {
   extra_info_["miss_count"] = static_cast<float>(miss_count_);
 }
 
-Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
+Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   quad_act_ = act.cwiseProduct(act_std_) + act_mean_;
   cmd_.t += sim_dt_;
   if (use_ctbr_) {
@@ -820,7 +820,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   return total_reward;
 }
 
-bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
+bool QuadrotorPosEnv::isTerminalState(Scalar &reward) {
   const bool hit_world_box =
     (quad_state_.x(QS::POSX) <= world_box_(0, 0)+0.001) ||
     (quad_state_.x(QS::POSX) >= world_box_(0, 1)-0.001) ||
@@ -871,7 +871,7 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
   return false;
 }
 
-bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
+bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
   if (cfg["quadrotor_env"]) {
     sim_dt_ = cfg["quadrotor_env"]["sim_dt"].as<Scalar>();
     max_t_ = cfg["quadrotor_env"]["max_t"].as<Scalar>();
@@ -1096,7 +1096,7 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
   return true;
 }
 
-bool QuadrotorDotEnv::getAct(Ref<Vector<>> act) const {
+bool QuadrotorPosEnv::getAct(Ref<Vector<>> act) const {
   if (cmd_.t >= 0.0 && quad_act_.allFinite()) {
     act = quad_act_;
     return true;
@@ -1104,17 +1104,17 @@ bool QuadrotorDotEnv::getAct(Ref<Vector<>> act) const {
   return false;
 }
 
-bool QuadrotorDotEnv::getAct(Command *const cmd) const {
+bool QuadrotorPosEnv::getAct(Command *const cmd) const {
   if (!cmd_.valid()) return false;
   *cmd = cmd_;
   return true;
 }
 
-void QuadrotorDotEnv::addObjectsToUnity(std::shared_ptr<UnityBridge> bridge) {
+void QuadrotorPosEnv::addObjectsToUnity(std::shared_ptr<UnityBridge> bridge) {
   bridge->addQuadrotor(quadrotor_ptr_);
 }
 
-std::ostream &operator<<(std::ostream &os, const QuadrotorDotEnv &quad_env) {
+std::ostream &operator<<(std::ostream &os, const QuadrotorPosEnv &quad_env) {
   os.precision(3);
   os << "Quadrotor Dot Environment:\n"
      << "obs dim =            [" << quad_env.obs_dim_ << "]\n"

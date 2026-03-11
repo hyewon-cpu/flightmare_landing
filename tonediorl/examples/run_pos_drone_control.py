@@ -25,14 +25,14 @@ if _PROJECT_ROOT not in sys.path:
 # from rpg_baselines.common.policies import MlpPolicy
 # from rpg_baselines.ppo.ppo2 import PPO2
 # from rpg_baselines.ppo.ppo2_test import test_model
-import tonedio_baselines.envs.dot_vec_env_wrapper as wrapper
-from tonedio_baselines.envs.dot_vec_env_wrapper import (
+import tonedio_baselines.envs.pos_vec_env_wrapper as wrapper
+from tonedio_baselines.envs.pos_vec_env_wrapper import (
     ObsNormUpdateCallback,
     CheckpointCallbackWithRMS
 )
 import tonedio_baselines.common.util as U
 #
-from flightgym import QuadrotorDotEnv_v1
+from flightgym import QuadrotorPosEnv_v1
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecMonitor
@@ -63,7 +63,7 @@ def ensure_flightmare_path(): #main()에서 호출
     #os.path.realpath(__file__) : 현재 파일의 절대 경로를 반환
     # os.path.dirname() : 주어진 경로에서 디렉토리 부분을 반환. ..은 상위 디렉토리를 의미하므로, 두 번 사용하여 프로젝트 루트로 이동
     env_root = os.environ.get("FLIGHTMARE_PATH", "") #환경변수 FLIGHTMARE_PATH의 값을 가져오고, 없으면 빈 문자열 반환
-    env_cfg = os.path.join(env_root, "flightlib", "configs", "quadrotor_dot_env.yaml")
+    env_cfg = os.path.join(env_root, "flightlib", "configs", "quadrotor_pos_env.yaml")
     if not env_root or not os.path.isfile(env_cfg): #env_root이 비어있거나, env_cfg 경로에 파일이 존재하지 않으면
         os.environ["FLIGHTMARE_PATH"] = root_dir
         print(f"[Config] Set FLIGHTMARE_PATH -> {root_dir}") 
@@ -128,7 +128,7 @@ def apply_init_pos_override(init_pos):
     if init_pos is None:
         return
     root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
-    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_dot_env.yaml")
+    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_pos_env.yaml")
     yaml = YAML() #raumel.yaml 라이브러리의 클래스 생성자 
     with open(quad_cfg_path, "r") as f: #r : 읽기 #open() : 파이썬 함수 파일 열기, with문 : 파일 자동 닫기
         quad_cfg = yaml.load(f)
@@ -140,7 +140,7 @@ def apply_init_pos_override(init_pos):
 
 def get_stage_switch_enabled():
     root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
-    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_dot_env.yaml")
+    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_pos_env.yaml")
     yaml = YAML()
     with open(quad_cfg_path, "r") as f:
         quad_cfg = yaml.load(f)
@@ -153,8 +153,8 @@ def build_env(
     include_prev_action=True,
     stage_switch_enabled=True,
 ):
-    env = wrapper.DotFlightEnvVec(   
-        QuadrotorDotEnv_v1(cfg_yaml_str, False),
+    env = wrapper.PosFlightEnvVec(   
+        QuadrotorPosEnv_v1(cfg_yaml_str, False),
         use_obs_norm=use_obs_norm,
         include_prev_action=bool(include_prev_action),
         stage_switch_enabled=bool(stage_switch_enabled),
@@ -162,8 +162,8 @@ def build_env(
     env = VecMonitor(env)  # SB3 전용 래퍼. 에피소드 통계를 자동 기록. episode 끝날때  info 에 길이/리턴 같은 통계를 넣음. 이걸 Tensorboard 에서 집계함 
     # VecMonitor는 episode가 끝날 때마다 정보 업데이트. 
     return env
-    #DotFlightEnvVec는 Stable Baselines3에서 사용할 수 있도록 Flightmare의 QuadrotorDotEnv_v1을 래핑한 클래스.
-    #QuadrotorDotEnv_v1 는 Flightmare 시뮬레이터에서 제공하는 드론 제어 환경. pybind_wrapper.cpp 에서 C++로 구현된 환경을 Python에서 사용할 수 있도록 래핑한 클래스.
+    #PosFlightEnvVec는 Stable Baselines3에서 사용할 수 있도록 Flightmare의 QuadrotorPosEnv_v1을 래핑한 클래스.
+    #QuadrotorPosEnv_v1 는 Flightmare 시뮬레이터에서 제공하는 드론 제어 환경. pybind_wrapper.cpp 에서 C++로 구현된 환경을 Python에서 사용할 수 있도록 래핑한 클래스.
     # cfg_yaml_str은 환경 설정을 담은 YAML 문자열. use_obs_norm과 include_prev_action은 관측값 정규화와 이전 행동 포함 여부를 설정하는 플래그.
 
 
@@ -307,9 +307,9 @@ def get_raw_obs_from_vec_env(vec_env):
     base = vec_env
     while hasattr(base, "venv"): #hasattr : base 에 venv 라는 속성이 있는지 확인하는 파이썬 내장 함수 
         base = base.venv  #계속 래퍼를 벗겨낸다 
-        #env = VecMonitor(DotFlightEnvVec(...)) 
+        #env = VecMonitor(PosFlightEnvVec(...)) 
         #바깥 래퍼는 안쪽 원본 env를 venv라는 이름으로 들고 있음
-        #base = DotFlightEnvVec 
+        #base = PosFlightEnvVec 
     raw = getattr(base, "_observation", None) #getattr : base 객체에서 _observation 이라는 속성을 가져옴. 없으면 None 반환.
     if raw is None:
         return None
@@ -417,7 +417,7 @@ def main():
     apply_init_pos_override(args.init_pos)
     yaml = YAML()  # 기본 typ='rt' (RoundTrip)
     cfg_path = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..","..","flightlib/configs/vec_env.yaml"))
-    cfg2_path = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..","..","flightlib/configs/quadrotor_dot_env.yaml"))
+    cfg2_path = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..","..","flightlib/configs/quadrotor_pos_env.yaml"))
     
     with open(cfg_path, "r") as f:
         cfg = yaml.load(f)
@@ -703,7 +703,7 @@ def main():
 
     else:
         # Test mode (simple loop)
-        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints/ppo_model_100000000_steps.zip') 
+        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints/ppo_model_25000000_steps.zip') 
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled

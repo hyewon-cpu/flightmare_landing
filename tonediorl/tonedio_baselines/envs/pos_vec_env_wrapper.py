@@ -6,7 +6,7 @@ from stable_baselines3.common.running_mean_std import RunningMeanStd
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 
 
-class DotFlightEnvVec(VecEnv):
+class PosFlightEnvVec(VecEnv):
     """
     SB3-compatible VecEnv wrapper for Flightmare's C++ VecEnv binding (flightgym.QuadrotorEnv_v1).
 

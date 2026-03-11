@@ -9,6 +9,7 @@
 #include "flightlib/envs/quadrotor_env/quadrotor_env.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_vis_env.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_dot_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_pos_env.hpp"
 #include "flightlib/envs/test_env.hpp"
 #include "flightlib/envs/vec_env.hpp"
 
@@ -94,5 +95,31 @@ PYBIND11_MODULE(flightgym, m) {
          "Get whether truncation is enabled")
     .def("__repr__", [](const VecEnv<QuadrotorDotEnv>& a) {
       return "RPG Drone Racing Dot Environment";
+    });
+
+
+    py::class_<VecEnv<QuadrotorPosEnv>>(m, "QuadrotorPosEnv_v1")
+    .def(py::init<>())
+    .def(py::init<const std::string&>())
+    .def(py::init<const std::string&, const bool>())
+    .def("reset", &VecEnv<QuadrotorPosEnv>::reset)
+    .def("step", &VecEnv<QuadrotorPosEnv>::step)
+    .def("testStep", &VecEnv<QuadrotorPosEnv>::testStep)
+    .def("setSeed", &VecEnv<QuadrotorPosEnv>::setSeed)
+    .def("close", &VecEnv<QuadrotorPosEnv>::close)
+    .def("isTerminalState", &VecEnv<QuadrotorPosEnv>::isTerminalState)
+    .def("curriculumUpdate", &VecEnv<QuadrotorPosEnv>::curriculumUpdate)
+    .def("connectUnity", &VecEnv<QuadrotorPosEnv>::connectUnity)
+    .def("disconnectUnity", &VecEnv<QuadrotorPosEnv>::disconnectUnity)
+    .def("getNumOfEnvs", &VecEnv<QuadrotorPosEnv>::getNumOfEnvs)
+    .def("getObsDim", &VecEnv<QuadrotorPosEnv>::getObsDim)
+    .def("getActDim", &VecEnv<QuadrotorPosEnv>::getActDim)
+    .def("getExtraInfoNames", &VecEnv<QuadrotorPosEnv>::getExtraInfoNames)
+    .def("setTruncationEnabled", &VecEnv<QuadrotorPosEnv>::setTruncationEnabled,
+         "Enable or disable episode truncation (useful for testing)")
+    .def("getTruncationEnabled", &VecEnv<QuadrotorPosEnv>::getTruncationEnabled,
+         "Get whether truncation is enabled")
+    .def("__repr__", [](const VecEnv<QuadrotorPosEnv>& a) {
+      return "RPG Drone Racing Position Environment";
     });
 }

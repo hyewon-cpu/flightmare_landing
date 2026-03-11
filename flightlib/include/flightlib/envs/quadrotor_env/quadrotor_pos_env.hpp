@@ -21,7 +21,7 @@
 
 namespace flightlib {
 
-namespace quaddotenv {
+namespace quadposenv {
 
 enum Ctl : int {
   // observations:
@@ -59,7 +59,7 @@ enum Ctl : int {
 
 };
 
-class QuadrotorDotEnv final : public EnvBase {
+class QuadrotorPosEnv final : public EnvBase {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -106,8 +106,8 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar pos_coeff_, ori_coeff_, lin_vel_coeff_, ang_vel_coeff_, act_coeff_;
 
   // observations and actions (for RL)
-  Vector<quaddotenv::kNObs> quad_obs_;
-  Vector<quaddotenv::kNAct> quad_act_;
+  Vector<quadposenv::kNObs> quad_obs_;
+  Vector<quadposenv::kNAct> quad_act_;
   std::shared_ptr<RGBCamera> rgb_camera_;
 
   // reward function design (for model-free reinforcement learning)
@@ -157,8 +157,8 @@ class QuadrotorDotEnv final : public EnvBase {
   int log_interval_steps_{200};
 
   // action and observation normalization (for learning)
-  Vector<quaddotenv::kNAct> act_mean_;
-  Vector<quaddotenv::kNAct> act_std_;
+  Vector<quadposenv::kNAct> act_mean_;
+  Vector<quadposenv::kNAct> act_std_;
   bool use_ctbr_{false};
   Vector<3> init_pos_{(Vector<3>() << 0.0, 0.0, 20.0).finished()};
   bool randomize_position_on_reset_{true};
@@ -167,14 +167,14 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar randomize_velocity_scale_{1.0};
   bool randomize_attitude_on_reset_{true};
   Scalar randomize_attitude_scale_{1.0};
-  Vector<quaddotenv::kNObs> obs_mean_ = Vector<quaddotenv::kNObs>::Zero();
-  Vector<quaddotenv::kNObs> obs_std_ = Vector<quaddotenv::kNObs>::Ones();
+  Vector<quadposenv::kNObs> obs_mean_ = Vector<quadposenv::kNObs>::Zero();
+  Vector<quadposenv::kNObs> obs_std_ = Vector<quadposenv::kNObs>::Ones();
 
   // tag target and camera projection parameters
-  std::array<Vector<3>, quaddotenv::kNumTags> tag_center_world_;
-  std::array<Matrix<3, 4>, quaddotenv::kNumTags> tag_corner_world_;
-  std::array<int, quaddotenv::kNumTags> tag_order_{{0, 1, 2}};
-  std::array<bool, quaddotenv::kNumTags> curr_tag_visible_{{false, false, false}};
+  std::array<Vector<3>, quadposenv::kNumTags> tag_center_world_;
+  std::array<Matrix<3, 4>, quadposenv::kNumTags> tag_corner_world_;
+  std::array<int, quadposenv::kNumTags> tag_order_{{0, 1, 2}};
+  std::array<bool, quadposenv::kNumTags> curr_tag_visible_{{false, false, false}};
   int stage_{0};
   bool area_reward_mode_active_{false};
   int miss_count_{0};
@@ -183,7 +183,7 @@ class QuadrotorDotEnv final : public EnvBase {
   int stage_miss_threshold_{4};
   bool stage_require_next_visible_{true};
   Scalar stage_switch_bonus_{2.0};
-  std::array<Scalar, quaddotenv::kNumTags> stage_target_area_{{500.0, 350.0, 220.0}};
+  std::array<Scalar, quadposenv::kNumTags> stage_target_area_{{500.0, 350.0, 220.0}};
   Scalar invisible_base_penalty_{0.5};
   Scalar invisible_base_penalty_extra_below_threshold_{0.0};
   Scalar invisible_miss_penalty_{0.2};

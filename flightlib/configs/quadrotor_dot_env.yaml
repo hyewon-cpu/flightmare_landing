@@ -1,0 +1,109 @@
+quadrotor_env:
+  sim_dt: 0.02
+  max_t: 10.0
+  control_mode: ctbr   # motor | ctbr
+  world_box: [[-10, 20.0], [-10.0, 20.0], [0.0, 50.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
+  init_pos: [5.5, 6.5, 40.0]                   # base reset position [x,y,z]
+  randomize_position_on_reset: false
+  randomize_position_scale: 5.0   # scale for position noise around init_pos
+  randomize_velocity_on_reset: false
+  randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
+  randomize_attitude_on_reset: false   # false -> start level (identity quaternion)
+  randomize_attitude_scale: 1.0   # attitude random scale (used only when randomize_attitude_on_reset=true)
+  camera:
+     # Camera pose in quadrotor body frame (B -> C)
+     # pos [0.0, 0.0, -0.3] quaternion [0.7071, -0.7071, 0.0, 0.0] -> 아래 보기
+     # pos [0.0, 0.0, 0.3] quaternion [1.0, 0.0, 0.0, 0.0] -> 앞에 보기
+    rel_pos: [0.0, 0.0, -0.3]           # [x, y, z] meters
+    rel_quat_wxyz: [0.7071, -0.7071, 0.0, 0.0]  # quaternion [w, x, y, z]
+    width: 256
+    height: 256
+    fov: 70.0
+    log_world_pose: false
+    log_world_pose_interval_steps: 50
+    dot_world_pos: [5.5, 6.5, 3.0]
+    # 3 QR tag centers in world frame
+    tag_centers_world:
+      - [5.5, 6.5, 3.0]
+      - [-2.3, 4.1, 3.0]
+      - [-0.6, 8.0, 3.0]
+    # For each tag: 4 corners in world frame (p0->p1->p2->p3)
+    # shape: [[[x,y,z] x4] x3]
+    tag_corners_world:
+      - # tag 0
+        - [9.5, 2.5, 3.0]
+        - [1.5, 2.5, 3.0]
+        - [1.5, 10.5, 3.0]
+        - [9.5, 10.5, 3.0]
+      - # tag 1
+        - [-0.3, 2.1, 3.0]
+        - [-4.3, 2.1, 3.0]
+        - [-4.3, 6.1, 3.0]
+        - [-0.3, 6.1, 3.0]
+      - # tag 2
+        - [0.4, 7.0, 3.0]
+        - [-1.6, 7.0, 3.0]
+        - [-1.6, 9.0, 3.0]
+        - [ 0.4, 9.0, 3.0]
+    # Backward-compatible single-tag keys (optional)
+    tag_center_world: [5.5, 6.5, 3.0]
+    tag_corner_world:
+      - [9.5, 2.5, 3.0]
+      - [1.5, 2.5, 3.0]
+      - [1.5, 10.5, 3.0]
+      - [9.5, 10.5, 3.0]
+
+quadrotor_dynamics:
+  mass: 0.73
+  arm_l: 0.17
+  motor_omega_min: 150.0 # motor rpm min
+  motor_omega_max: 3000.0 # motor rpm max
+  motor_tau: 0.0001 # motor step response
+  thrust_map: [1.3298253500372891e-06, 0.0038360810526746033, 
+      -1.7689986848125325]
+  kappa: 0.016 # rotor drag coeff
+  omega_max: [0.8, 0.8, 0.5]  # body rate constraint (x, y, z) 
+
+rl:
+  ######terminal 조건######################################################################
+  landing_terminal_z: 3.02  #consider terminted when z<terminal_Z
+  landing_success_xy_error: 0.5  #xy error needs to be smaller than this to succeed
+  landing_success_vz: 0.25  #z error needs to be smaller than this to succeed
+  landing_success_tilt: 0.2 #tilt needs to be smaller than this to succeed
+  landing_success_vxy: 0.3  #xy speed needs to be smaller than this to succeed
+  landing_success_body_rate: 0.3 #body-rate norm needs to be smaller than this to succeed
+  landing_success_reward: 100.0
+  landing_failure_reward: -10.0
+  landing_tilt_hard: 10 #terminate when tilt exceeds this [rad]
+
+  ########### 로그 ##############
+  log_interval_steps: 10000 # ___ step 마다 로그 출력
+
+  ####### tag-based image-space reward##############################################################
+  #사용하는 계수들 
+  tag_center_coeff: 5.0 #reward coefficient for tag center error (squared)
+  tag_area_coeff: 50 #reward coefficient for tag area error (squared)
+  tag_shape2_coeff: 10.0 #reward coefficient for tag shape error (squared) -- x,y 축에 평행한지 
+
+  #사용하는 설정값들 
+  stage_switch_enabled: false  # false -> always use stage 0 (tag 0 only)
+  hold_last_tag_obs: false  # true -> if QR is not visible, keep previous tag obs; false -> fill tag obs with -1
+  stage_target_area: [1000.0, 200.0, 100.0]  # target projected area for [largest, middle, smallest] + invisible threshold 기준
+  invisible_base_penalty: 10.0  # base penalty when previous visible area is above stage threshold and QR is not fully visible
+  invisible_base_penalty_extra_below_threshold: 10.0  # extra base penalty when previous visible area is below stage threshold
+
+
+  #지금 사용 안하는 계수들 (일단 0으로 설정)
+  landing_w_xy: 0.0 #xy position difference penalty weight
+  tag_shape_coeff: 0.0 #reward coefficient for tag shape error (squared)
+  tag_area_small_coeff: 0.0 #일정 area 보다 작으면 패널티의 계수 
+  tag_vis_coeff: 0.0 # coefficient for tag visibility (binary)
+  tag_smooth_coeff: 0.0  #reward coefficient for smoothness of tag observations (squared difference between consecutive steps)
+
+  #지금 사용안하는 설정값들
+  tag_min_area: 400.0 #minimum area for partial reward (corresponding to being visible at the max altitude)
+  stage_miss_threshold: 4  # consecutive misses before switching to next QR stage
+  stage_require_next_visible: true  # only switch when next-stage QR is visible
+  stage_switch_bonus: 1.0  # bonus when stage is advanced
+  invisible_miss_penalty: 0.0  # additional penalty per consecutive miss step
+  invisible_stage_penalty: 0.0  # additional penalty scaled by stage index
