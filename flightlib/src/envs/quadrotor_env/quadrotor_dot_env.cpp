@@ -276,8 +276,8 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_obs_.setZero();
   quad_obs_.segment<quaddotenv::kTagObs>(quaddotenv::kObs).setConstant(-1.0);
   quad_act_.setZero();
-  prev_uv_.setZero();
-  prev_uv_valid_ = false;
+  prev_corner_uv_.setZero();
+  prev_corner_uv_valid_ = false;
   curr_tag_visible_.fill(false);
   stage_ = 0;
   area_reward_mode_active_ = false;
@@ -596,7 +596,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   Scalar r_shape = 0.0; // tag shape - edge length 균일성, 대각선 길이 균일성, 직각 정도, 작은 면적 패널티 종합. 실제 tag 모양이 정사각형에 가까울수록 penalty 줄어듬
   Scalar r_shape2 = 0.0; // tag axis alignment - 변이 이미지 x/y 축과 평행할수록 보상
   Scalar r_area_small = 0.0; // tag_min_area 미만일 때만 적용되는 별도 패널티
-  Scalar r_smooth = -act.cast<Scalar>().squaredNorm(); // 행동의 크기에 대한 패널티. 작은 행동일수록 penalty 줄어듬 (즉, 행동이 너무 크면 패널티가 커짐)
+  Scalar r_smooth = 0.0; // active tag 4개 코너의 연속 프레임 위치 변화량에 대한 패널티
   Scalar r_invisible = 0.0; // 태그가 보이지 않을 때 패널티. 보이지 않을수록 penalty 커짐
   Scalar observed_area = -1.0; // active tag 면적(관측 불가 시 -1)
 
@@ -607,7 +607,6 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     const Scalar ey = (cy - half_h) / std::max(half_h, eps); //tag center의 y 좌표가 이미지 중심에서 멀어질수록 ey의 절댓값이 커짐. half_h로 나누어서 정규화 (0~1 사이). eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar e_center = std::sqrt(ex * ex + ey * ey);
     r_center = -e_center;
-
     const Scalar x0 = quad_obs_(active_base + quaddotenv::kCorner0X); //코너0의 x 좌표
     const Scalar y0 = quad_obs_(active_base + quaddotenv::kCorner0Y); //코너0의 y 좌표
     const Scalar x1 = quad_obs_(active_base + quaddotenv::kCorner1X);
@@ -616,6 +615,15 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     const Scalar y2 = quad_obs_(active_base + quaddotenv::kCorner2Y);
     const Scalar x3 = quad_obs_(active_base + quaddotenv::kCorner3X);
     const Scalar y3 = quad_obs_(active_base + quaddotenv::kCorner3Y);
+    Matrix<4, 2> curr_corner_uv;
+    curr_corner_uv <<
+      (x0 - half_w), (y0 - half_h) ,
+      (x1 - half_w), (y1 - half_h),
+      (x2 - half_w), (y2 - half_h) ,
+      (x3 - half_w), (y3 - half_h) ;
+    if (prev_corner_uv_valid_) {
+      r_smooth = -(curr_corner_uv - prev_corner_uv_).squaredNorm();
+    }
 
     const Scalar area_twice =
       x0 * y1 + x1 * y2 + x2 * y3 + x3 * y0 -
@@ -684,6 +692,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     r_shape2 = -e_axis_align;
   }
   if (!(tag_visible && corners_visible)) {
+    prev_corner_uv_valid_ = false;
     if (miss_count_ == 0) {
       // area on the last visible step before this invisible streak starts
       miss_start_prev_area_ = last_visible_area_;
@@ -711,6 +720,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     miss_start_prev_area_ = -1.0;
   }
   Scalar r_switch = 0.0;
+  bool stage_advanced = false;
   if (stage_switch_enabled_ && stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
     bool can_advance = false;
     {
@@ -735,6 +745,8 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     }
     if (can_advance) {
       stage_++;
+      stage_advanced = true;
+      prev_corner_uv_valid_ = false;
       miss_count_ = 0; //stage가 바뀌면 태그가 보이지 않는 상태도 초기화
       miss_start_prev_area_ = -1.0;
       r_switch = stage_switch_bonus_;   
@@ -799,19 +811,32 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   last_observed_area_ = observed_area;
   last_tag_visible_ = tag_visible;
   last_corners_visible_ = corners_visible;
+  if (tag_visible && corners_visible && !stage_advanced) {
+    prev_corner_uv_ <<
+      (quad_obs_(active_base + quaddotenv::kCorner0X) - half_w) / std::max(half_w, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner0Y) - half_h) / std::max(half_h, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner1X) - half_w) / std::max(half_w, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner1Y) - half_h) / std::max(half_h, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner2X) - half_w) / std::max(half_w, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner2Y) - half_h) / std::max(half_h, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner3X) - half_w) / std::max(half_w, eps),
+      (quad_obs_(active_base + quaddotenv::kCorner3Y) - half_h) / std::max(half_h, eps);
+    prev_corner_uv_valid_ = true;
+  }
 
-  const Vector<3> euler_zyx_log =
-    quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
+  const Matrix<3, 3> R_WB_log = quad_state_.q().toRotationMatrix();
+  const Vector<3> euler_zyx_log = R_WB_log.eulerAngles(2, 1, 0);
   const Scalar yaw_log = euler_zyx_log(0);
-  const Scalar pitch_log = euler_zyx_log(1);
-  const Scalar roll_log = euler_zyx_log(2);
+  const Scalar cos_tilt_log =
+    std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB_log(2, 2)));
+  const Scalar tilt_log = std::acos(cos_tilt_log);
 
   log_counter_++;
   if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
     logger_.info(
-      "quad pos | x=%.3f y=%.3f z=%.3f yaw=%.4f pitch=%.4f roll=%.4f",
+      "quad pos | x=%.3f y=%.3f z=%.3f yaw=%.4f tilt=%.4f",
       quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ),
-      yaw_log, pitch_log, roll_log);
+      yaw_log, tilt_log);
     logger_.info(
       "tag area | stage=%d active_tag=%d visible=%d corners=%d area=%.3f target=%.3f",
       stage_, active_tag_idx, static_cast<int>(tag_visible),
@@ -836,36 +861,36 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
     (quad_state_.x(QS::POSZ) <= world_box_(2, 0)+0.001) ||
     (quad_state_.x(QS::POSZ) >= world_box_(2, 1)-0.001);
   if (hit_world_box) {
-    logger_.warn(
-      "terminate reason=world_box "
-      "pos=(" + std::to_string(quad_state_.x(QS::POSX)) + ", " +
-      std::to_string(quad_state_.x(QS::POSY)) + ", " +
-      std::to_string(quad_state_.x(QS::POSZ)) + ") "
-      "box=[(" + std::to_string(world_box_(0, 0)) + ", " +
-      std::to_string(world_box_(0, 1)) + "), (" +
-      std::to_string(world_box_(1, 0)) + ", " +
-      std::to_string(world_box_(1, 1)) + "), (" +
-      std::to_string(world_box_(2, 0)) + ", " +
-      std::to_string(world_box_(2, 1)) + ")]");
+    if (log_counter_% std::max(1, log_interval_steps_) == 0) {
+      logger_.warn(
+        "terminate reason=world_box "
+        "pos=(" + std::to_string(quad_state_.x(QS::POSX)) + ", " +
+        std::to_string(quad_state_.x(QS::POSY)) + ", " +
+        std::to_string(quad_state_.x(QS::POSZ)) + ") "
+        "box=[(" + std::to_string(world_box_(0, 0)) + ", " +
+        std::to_string(world_box_(0, 1)) + "), (" +
+        std::to_string(world_box_(1, 0)) + ", " +
+        std::to_string(world_box_(1, 1)) + "), (" +
+        std::to_string(world_box_(2, 0)) + ", " +
+        std::to_string(world_box_(2, 1)) + ")]");}
     reward = landing_failure_reward_;
     return true;
   }
 
-  // Early terminate on excessive attitude using raw pitch/roll.
+  // Early terminate on excessive tilt computed from quaternion / rotation matrix.
   {
-    const Vector<3> euler_zyx =
-      quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
-    const Scalar pitch_abs = std::abs(euler_zyx(1));
-    const Scalar roll_abs = std::abs(euler_zyx(2));
-    if (pitch_abs > landing_tilt_hard_ || roll_abs > landing_tilt_hard_) {
-      logger_.warn(
-        "terminate reason=attitude_limit "
-        "yaw=" + std::to_string(euler_zyx(0)) +
-        " pitch=" + std::to_string(euler_zyx(1)) +
-        " roll=" + std::to_string(euler_zyx(2)) +
-        " pitch_abs=" + std::to_string(pitch_abs) +
-        " roll_abs=" + std::to_string(roll_abs) +
-        " threshold=" + std::to_string(landing_tilt_hard_));
+    const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+    const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
+    const Scalar cos_tilt =
+      std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
+    const Scalar tilt = std::acos(cos_tilt);
+    if (tilt > landing_tilt_hard_) {
+      if (log_counter_% std::max(1, log_interval_steps_) == 0){
+        logger_.warn(
+          "terminate reason=attitude_limit "
+          "yaw=" + std::to_string(euler_zyx(0)) +
+          " tilt=" + std::to_string(tilt) +
+          " threshold=" + std::to_string(landing_tilt_hard_));}
       reward = landing_tilt_hard_penalty_;
       return true;
     }
@@ -880,31 +905,29 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
     const Scalar vxy = quad_state_.v.head<2>().norm();
     const Scalar vz = std::abs(quad_state_.x(QS::VELZ));
     const Scalar body_rate = quad_state_.w.norm();
-    const Vector<3> euler_zyx =
-      quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
-    const Scalar pitch_abs = std::abs(euler_zyx(1));
-    const Scalar roll_abs = std::abs(euler_zyx(2));
+    const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+    const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
+    const Scalar cos_tilt =
+      std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
+    const Scalar tilt = std::acos(cos_tilt);
 
     const bool success = (xy_error < landing_success_xy_error_) &&
                          (vxy < landing_success_vxy_) &&
                          (vz < landing_success_vz_) &&
-                         (pitch_abs < landing_success_tilt_) &&
-                         (roll_abs < landing_success_tilt_) &&
+                         (tilt < landing_success_tilt_) &&
                          (body_rate < landing_success_body_rate_);
-    logger_.warn(
-      std::string("terminate reason=landing_terminal ") +
-      (success ? "result=success " : "result=failure ") +
-      "z=" + std::to_string(quad_state_.x(QS::POSZ)) +
-      " terminal_z=" + std::to_string(landing_terminal_z_) +
-      " xy_error=" + std::to_string(xy_error) +
-      " vxy=" + std::to_string(vxy) +
-      " vz=" + std::to_string(vz) +
-      " yaw=" + std::to_string(euler_zyx(0)) +
-      " pitch=" + std::to_string(euler_zyx(1)) +
-      " roll=" + std::to_string(euler_zyx(2)) +
-      " pitch_abs=" + std::to_string(pitch_abs) +
-      " roll_abs=" + std::to_string(roll_abs) +
-      " body_rate=" + std::to_string(body_rate));
+    if (log_counter_% std::max(1, log_interval_steps_) == 0){
+      logger_.warn(
+        std::string("terminate reason=landing_terminal ") +
+        (success ? "result=success " : "result=failure ") +
+        "z=" + std::to_string(quad_state_.x(QS::POSZ)) +
+        " terminal_z=" + std::to_string(landing_terminal_z_) +
+        " xy_error=" + std::to_string(xy_error) +
+        " vxy=" + std::to_string(vxy) +
+        " vz=" + std::to_string(vz) +
+        " yaw=" + std::to_string(euler_zyx(0)) +
+        " tilt=" + std::to_string(tilt) +
+        " body_rate=" + std::to_string(body_rate));}
     reward = success ? landing_success_reward_ : landing_failure_reward_;
     return true;
   }

@@ -199,8 +199,8 @@ class QuadrotorDotEnv final : public EnvBase {
   int cam_width_{84};
   int cam_height_{84};
   bool log_missing_rgb_{false};
-  Vector<2> prev_uv_ = Vector<2>::Zero();
-  bool prev_uv_valid_{false};
+  Matrix<4, 2> prev_corner_uv_ = Matrix<4, 2>::Zero();
+  bool prev_corner_uv_valid_{false};
   bool log_world_pose_{false};
   int log_world_pose_interval_steps_{50};
   int world_pose_log_counter_{0};

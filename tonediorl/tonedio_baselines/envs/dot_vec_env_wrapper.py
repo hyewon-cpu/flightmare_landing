@@ -35,6 +35,7 @@ class DotFlightEnvVec(VecEnv):
         stage_switch_enabled: bool = True,
         include_area_obs: bool = True,
         include_shape_obs: bool = True,
+        include_tag_id_obs: bool = False,
     ):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
@@ -47,6 +48,7 @@ class DotFlightEnvVec(VecEnv):
         self.stage_switch_enabled = bool(stage_switch_enabled)
         self.include_area_obs = bool(include_area_obs)
         self.include_shape_obs = bool(include_shape_obs)
+        self.include_tag_id_obs = bool(include_tag_id_obs)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -76,11 +78,12 @@ class DotFlightEnvVec(VecEnv):
             # stage_switch_enabled=True  -> use all tag features
             # stage_switch_enabled=False -> use first tag features only
             self._policy_num_dot_tags = self._num_dot_tags if self.stage_switch_enabled else 1
-            # PPO input excludes tag_id from each tag block (11 -> 10).
-            self._policy_dot_uv_dim = self._policy_num_dot_tags * self.DOT_POLICY_FEAT_DIM
+            self._policy_tag_feat_dim = self.DOT_UV_DIM if self.include_tag_id_obs else self.DOT_POLICY_FEAT_DIM
+            self._policy_dot_uv_dim = self._policy_num_dot_tags * self._policy_tag_feat_dim
         else:
             self._num_dot_tags = 0
             self._policy_num_dot_tags = 0
+            self._policy_tag_feat_dim = self._dot_uv_dim
             self._policy_dot_uv_dim = self._dot_uv_dim
         self._append_prev_action = self.include_prev_action and (not self._is_image_obs)
 
@@ -155,6 +158,7 @@ class DotFlightEnvVec(VecEnv):
             f"reward_obs_dim={self._reward_obs_dim if self._is_dot_image_obs else 0}, "
             f"include_area_obs={self.include_area_obs}, "
             f"include_shape_obs={self.include_shape_obs}, "
+            f"include_tag_id_obs={self.include_tag_id_obs}, "
             f"stage_switch_enabled={self.stage_switch_enabled}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
             f"include_prev_action={self._append_prev_action}"
@@ -446,7 +450,7 @@ class DotFlightEnvVec(VecEnv):
 
     def _extract_policy_dot_obs(self, obs: np.ndarray) -> np.ndarray:
         """
-        Extract dot observations for policy and remove tag_id from each tag block.
+        Extract dot observations for policy and optionally keep tag_id in each tag block.
         Raw tag block format is [center_x, center_y, c0x, c0y, c1x, c1y, c2x, c2y, c3x, c3y, tag_id].
         """
         if obs.ndim != 2:
@@ -458,8 +462,8 @@ class DotFlightEnvVec(VecEnv):
             )
         dot_obs = obs[:, :raw_dot_dim].astype(np.float32)
         dot_obs = dot_obs.reshape(obs.shape[0], self._policy_num_dot_tags, self.DOT_UV_DIM)
-        # Keep first 10 values per tag (drop tag_id at index 10).
-        dot_obs = dot_obs[:, :, :self.DOT_POLICY_FEAT_DIM]
+        if not self.include_tag_id_obs:
+            dot_obs = dot_obs[:, :, :self.DOT_POLICY_FEAT_DIM]
         return dot_obs.reshape(obs.shape[0], self._policy_dot_uv_dim).astype(np.float32)
 
 

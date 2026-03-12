@@ -108,6 +108,8 @@ def parser():
                         help="Include area feature in PPO observation when available (1=True, 0=False)")
     parser.add_argument('--include_shape_obs', type=int, default=1,
                         help="Include shape feature in PPO observation when available (1=True, 0=False)")
+    parser.add_argument('--include_tag_id_obs', type=int, default=0,
+                        help="Include tag_id in PPO observation for each tag block (1=True: 11 dims, 0=False: 10 dims)")
     parser.add_argument('--rms_path', type=str, default=None, 
                         help="Path to normalization statistics (.npz file) for testing. "
                              "If None, will try to find RMS file from checkpoint directory.")
@@ -161,6 +163,7 @@ def build_env(
     stage_switch_enabled=True,
     include_area_obs=True,
     include_shape_obs=True,
+    include_tag_id_obs=False,
 ):
     env = wrapper.DotFlightEnvVec(   
         QuadrotorDotEnv_v1(cfg_yaml_str, False),
@@ -169,6 +172,7 @@ def build_env(
         stage_switch_enabled=bool(stage_switch_enabled),
         include_area_obs=bool(include_area_obs),
         include_shape_obs=bool(include_shape_obs),
+        include_tag_id_obs=bool(include_tag_id_obs),
     )
     env = VecMonitor(env)  # SB3 전용 래퍼. 에피소드 통계를 자동 기록. episode 끝날때  info 에 길이/리턴 같은 통계를 넣음. 이걸 Tensorboard 에서 집계함 
     # VecMonitor는 episode가 끝날 때마다 정보 업데이트. 
@@ -568,10 +572,12 @@ def main():
     include_prev_action = bool(args.include_prev_action)
     include_area_obs = bool(args.include_area_obs)
     include_shape_obs = bool(args.include_shape_obs)
+    include_tag_id_obs = bool(args.include_tag_id_obs)
     stage_switch_enabled = get_stage_switch_enabled()
     print(
         f"[Config] rl.stage_switch_enabled={stage_switch_enabled}, "
-        f"include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}"
+        f"include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}, "
+        f"include_tag_id_obs={include_tag_id_obs}"
     )
     env = build_env(
         cfg_yaml_str,
@@ -580,6 +586,7 @@ def main():
         stage_switch_enabled=stage_switch_enabled,
         include_area_obs=include_area_obs,
         include_shape_obs=include_shape_obs,
+        include_tag_id_obs=include_tag_id_obs,
     )
     unity_connected = False
     if need_unity_camera:
@@ -623,6 +630,7 @@ def main():
             "include_prev_action": include_prev_action,
             "include_area_obs": include_area_obs,
             "include_shape_obs": include_shape_obs,
+            "include_tag_id_obs": include_tag_id_obs,
             "stage_switch_enabled": stage_switch_enabled,
             "tag_center_coefficient" : cfg2["rl"].get("tag_center_coefficient", "not defined"),
             "tag_area_coeff" : cfg2["rl"].get("tag_area_coefficient", "not defined"),
@@ -720,6 +728,7 @@ def main():
                 stage_switch_enabled=stage_switch_enabled,
                 include_area_obs=include_area_obs,
                 include_shape_obs=include_shape_obs,
+                include_tag_id_obs=include_tag_id_obs,
             )
             eval_callback = MeanRewardPerStepEvalCallback(
                 eval_env,
@@ -876,7 +885,7 @@ def main():
         print(f"[Test Mode] Truncation disabled - episodes will run until crash or manual stop")
         
         max_ep_length = 1000  # Set a large limit for Python loop (C++ truncation is disabled)
-        num_rollouts = 5
+        num_rollouts = 100
 
         for n_roll in range(num_rollouts):
             print(f"\n=== Rollout {n_roll} ===")

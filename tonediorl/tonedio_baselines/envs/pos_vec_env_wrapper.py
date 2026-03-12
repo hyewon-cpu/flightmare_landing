@@ -24,8 +24,8 @@ class PosFlightEnvVec(VecEnv):
     IMG_HEIGHT = 84
     IMG_WIDTH = 84
     IMG_CHANNELS = 3
-    DOT_UV_DIM = 11
-    DOT_POLICY_FEAT_DIM = 10
+    TAG_UV_DIM = 11
+    TAG_POLICY_FEAT_DIM = 10
 
     def __init__(
         self,
@@ -33,6 +33,9 @@ class PosFlightEnvVec(VecEnv):
         use_obs_norm: bool = True,
         include_prev_action: bool = False,
         stage_switch_enabled: bool = True,
+        include_area_obs: bool = True,
+        include_shape_obs: bool = True,
+        include_tag_id_obs: bool = False,
     ):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
@@ -43,6 +46,9 @@ class PosFlightEnvVec(VecEnv):
         self.use_obs_norm = use_obs_norm
         self.include_prev_action = bool(include_prev_action)
         self.stage_switch_enabled = bool(stage_switch_enabled)
+        self.include_area_obs = bool(include_area_obs)
+        self.include_shape_obs = bool(include_shape_obs)
+        self.include_tag_id_obs = bool(include_tag_id_obs)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -52,32 +58,33 @@ class PosFlightEnvVec(VecEnv):
         self._reward_obs_indices = []
         area_key = "metric_area" if "metric_area" in self._extraInfoNameToIdx else "reward_area"
         shape_key = "metric_shape2" if "metric_shape2" in self._extraInfoNameToIdx else "reward_shape2"
-        if area_key in self._extraInfoNameToIdx:
+        if self.include_area_obs and area_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[area_key])
-        if shape_key in self._extraInfoNameToIdx:
+        if self.include_shape_obs and shape_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[shape_key])
         self._reward_obs_dim = len(self._reward_obs_indices)
         self._image_dim = self.IMG_HEIGHT * self.IMG_WIDTH * self.IMG_CHANNELS
-        self._dot_uv_dim = max(0, self.num_obs - self._image_dim)
+        self._tag_uv_dim = max(0, self.num_obs - self._image_dim)
         self._is_image_obs = self.num_obs == (
             self._image_dim
         )
-        self._is_dot_image_obs = (
+        self._is_tag_image_obs = (
             self.num_obs > self._image_dim
-            and self._dot_uv_dim >= self.DOT_UV_DIM
-            and self._dot_uv_dim % self.DOT_UV_DIM == 0
+            and self._tag_uv_dim >= self.TAG_UV_DIM
+            and self._tag_uv_dim % self.TAG_UV_DIM == 0
         )
-        if self._is_dot_image_obs:
-            self._num_dot_tags = self._dot_uv_dim // self.DOT_UV_DIM
+        if self._is_tag_image_obs:
+            self._num_tags = self._tag_uv_dim // self.TAG_UV_DIM
             # stage_switch_enabled=True  -> use all tag features
             # stage_switch_enabled=False -> use first tag features only
-            self._policy_num_dot_tags = self._num_dot_tags if self.stage_switch_enabled else 1
-            # PPO input excludes tag_id from each tag block (11 -> 10).
-            self._policy_dot_uv_dim = self._policy_num_dot_tags * self.DOT_POLICY_FEAT_DIM
+            self._policy_num_tags = self._num_tags if self.stage_switch_enabled else 1
+            self._policy_tag_feat_dim = self.TAG_UV_DIM if self.include_tag_id_obs else self.TAG_POLICY_FEAT_DIM
+            self._policy_tag_uv_dim = self._policy_num_tags * self._policy_tag_feat_dim
         else:
-            self._num_dot_tags = 0
-            self._policy_num_dot_tags = 0
-            self._policy_dot_uv_dim = self._dot_uv_dim
+            self._num_tags = 0
+            self._policy_num_tags = 0
+            self._policy_tag_feat_dim = self._tag_uv_dim
+            self._policy_tag_uv_dim = self._tag_uv_dim
         self._append_prev_action = self.include_prev_action and (not self._is_image_obs)
 
         if self._is_image_obs and use_obs_norm:
@@ -92,9 +99,9 @@ class PosFlightEnvVec(VecEnv):
                 shape=(self.IMG_HEIGHT, self.IMG_WIDTH, self.IMG_CHANNELS),
                 dtype=np.uint8,
             )
-        elif self._is_dot_image_obs:
+        elif self._is_tag_image_obs:
             # Policy sees all tag UV features when stage switching is enabled.
-            policy_dim = self._policy_dot_uv_dim + self._reward_obs_dim + (self.num_acts if self._append_prev_action else 0)
+            policy_dim = self._policy_tag_uv_dim + self._reward_obs_dim + (self.num_acts if self._append_prev_action else 0)
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
@@ -133,8 +140,8 @@ class PosFlightEnvVec(VecEnv):
         # Observation normalization
         if self.use_obs_norm:
             # Normalize only the observation features that are fed to policy.
-            if self._is_dot_image_obs:
-                rms_shape = (self._policy_dot_uv_dim,)
+            if self._is_tag_image_obs:
+                rms_shape = (self._policy_tag_uv_dim,)
             else:
                 rms_shape = (self.num_obs,)
             self.obs_rms = RunningMeanStd(shape=rms_shape)
@@ -146,9 +153,12 @@ class PosFlightEnvVec(VecEnv):
         print(
             f"[FlightEnvVecSB3] num_envs={self._num_envs}, "
             f"raw_obs_dim={self.num_obs}, policy_obs_shape={self._observation_space.shape}, "
-            f"dot_uv_dim={self._dot_uv_dim if self._is_dot_image_obs else 0}, "
-            f"policy_dot_uv_dim={self._policy_dot_uv_dim if self._is_dot_image_obs else 0}, "
-            f"reward_obs_dim={self._reward_obs_dim if self._is_dot_image_obs else 0}, "
+            f"tag_uv_dim={self._tag_uv_dim if self._is_tag_image_obs else 0}, "
+            f"policy_tag_uv_dim={self._policy_tag_uv_dim if self._is_tag_image_obs else 0}, "
+            f"reward_obs_dim={self._reward_obs_dim if self._is_tag_image_obs else 0}, "
+            f"include_area_obs={self.include_area_obs}, "
+            f"include_shape_obs={self.include_shape_obs}, "
+            f"include_tag_id_obs={self.include_tag_id_obs}, "
             f"stage_switch_enabled={self.stage_switch_enabled}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
             f"include_prev_action={self._append_prev_action}"
@@ -411,12 +421,12 @@ class PosFlightEnvVec(VecEnv):
             return obs.reshape(
                 self._num_envs, self.IMG_HEIGHT, self.IMG_WIDTH, self.IMG_CHANNELS
             ).astype(np.uint8)
-        if self._is_dot_image_obs:
+        if self._is_tag_image_obs:
             # `obs` may be raw C++ observation or already-extracted policy features.
-            if obs.ndim == 2 and obs.shape[1] == self._policy_dot_uv_dim:
+            if obs.ndim == 2 and obs.shape[1] == self._policy_tag_uv_dim:
                 policy_obs = obs.astype(np.float32)
             else:
-                policy_obs = self._extract_policy_dot_obs(obs)
+                policy_obs = self._extract_policy_tag_obs(obs)
             if self._reward_obs_dim > 0:
                 reward_obs = self._extraInfo[:, self._reward_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, reward_obs], axis=1).astype(np.float32)
@@ -434,27 +444,27 @@ class PosFlightEnvVec(VecEnv):
         """
         if self._is_image_obs:
             return obs.astype(np.float32)
-        if self._is_dot_image_obs:
-            return self._extract_policy_dot_obs(obs)
+        if self._is_tag_image_obs:
+            return self._extract_policy_tag_obs(obs)
         return obs.astype(np.float32)
 
-    def _extract_policy_dot_obs(self, obs: np.ndarray) -> np.ndarray:
+    def _extract_policy_tag_obs(self, obs: np.ndarray) -> np.ndarray:
         """
-        Extract dot observations for policy and remove tag_id from each tag block.
+        Extract tag observations for policy and optionally keep tag_id in each tag block.
         Raw tag block format is [center_x, center_y, c0x, c0y, c1x, c1y, c2x, c2y, c3x, c3y, tag_id].
         """
         if obs.ndim != 2:
             raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {obs.shape}")
-        raw_dot_dim = self._policy_num_dot_tags * self.DOT_UV_DIM
-        if obs.shape[1] < raw_dot_dim:
+        raw_tag_dim = self._policy_num_tags * self.TAG_UV_DIM
+        if obs.shape[1] < raw_tag_dim:
             raise ValueError(
-                f"Obs dim too small for dot extraction: got {obs.shape[1]}, need at least {raw_dot_dim}"
+                f"Obs dim too small for tag extraction: got {obs.shape[1]}, need at least {raw_tag_dim}"
             )
-        dot_obs = obs[:, :raw_dot_dim].astype(np.float32)
-        dot_obs = dot_obs.reshape(obs.shape[0], self._policy_num_dot_tags, self.DOT_UV_DIM)
-        # Keep first 10 values per tag (drop tag_id at index 10).
-        dot_obs = dot_obs[:, :, :self.DOT_POLICY_FEAT_DIM]
-        return dot_obs.reshape(obs.shape[0], self._policy_dot_uv_dim).astype(np.float32)
+        tag_obs = obs[:, :raw_tag_dim].astype(np.float32)
+        tag_obs = tag_obs.reshape(obs.shape[0], self._policy_num_tags, self.TAG_UV_DIM)
+        if not self.include_tag_id_obs:
+            tag_obs = tag_obs[:, :, :self.TAG_POLICY_FEAT_DIM]
+        return tag_obs.reshape(obs.shape[0], self._policy_tag_uv_dim).astype(np.float32)
 
 
     def normalize_obs(self, obs: np.ndarray) -> np.ndarray:
@@ -467,11 +477,11 @@ class PosFlightEnvVec(VecEnv):
         """
         if self._is_image_obs:
             return obs.astype(np.float32)
-        if self._is_dot_image_obs:
-            policy_obs = self._extract_policy_dot_obs(obs)
+        if self._is_tag_image_obs:
+            policy_obs = self._extract_policy_tag_obs(obs)
             if not self.use_obs_norm:
                 return policy_obs
-            # Dot UV observations are image-plane pixel coordinates in [0, 83].
+            # Tag UV observations are image-plane pixel coordinates in [0, 83].
             # Use fixed scaling for policy input normalization.
             return (policy_obs / 83.0).astype(np.float32)
         if not self.use_obs_norm:
@@ -544,7 +554,7 @@ class ObsNormUpdateCallback(BaseCallback):
     periodically during training. In SB3, this happens at the end of each rollout.
     
     Usage:
-        from tonedio_baselines.envs.dot_vec_env_wrapper import ObsNormUpdateCallback
+        from tonedio_baselines.envs.pos_vec_env_wrapper import ObsNormUpdateCallback
         
         callback = ObsNormUpdateCallback()
         model.learn(total_timesteps=1e6, callback=callback)
@@ -560,12 +570,12 @@ class ObsNormUpdateCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         """
         Called at the end of each rollout (after collecting n_steps).
-        Updates normalization statistics for all DotFlightEnvVec instances in the wrapper chain.
+        Updates normalization statistics for all PosFlightEnvVec instances in the wrapper chain.
         """
-        # Find DotFlightEnvVec in the environment wrapper chain
+        # Find PosFlightEnvVec in the environment wrapper chain
         env = self.training_env
         while env is not None:
-            if isinstance(env, DotFlightEnvVec):
+            if isinstance(env, PosFlightEnvVec):
                 env.update_rms()
                 break  # Only need to update once
             # Traverse wrapper chain
@@ -584,7 +594,7 @@ class CheckpointCallbackWithRMS(CheckpointCallback):
     whenever a model checkpoint is saved.
     
     Usage:
-        from tonedio_baselines.envs.dot_vec_env_wrapper import CheckpointCallbackWithRMS
+        from tonedio_baselines.envs.pos_vec_env_wrapper import CheckpointCallbackWithRMS
         
         callback = CheckpointCallbackWithRMS(
             save_freq=10000,
@@ -621,10 +631,10 @@ class CheckpointCallbackWithRMS(CheckpointCallback):
         """
         Save normalization statistics to the same directory as checkpoints.
         """
-        # Find DotFlightEnvVec in the environment wrapper chain
+        # Find PosFlightEnvVec in the environment wrapper chain
         env = self.training_env
         while env is not None:
-            if isinstance(env, DotFlightEnvVec):
+            if isinstance(env, PosFlightEnvVec):
                 # Save RMS in a subdirectory
                 rms_dir = os.path.join(self.save_path, "RMS")
                 self._rms_save_counter += 1
@@ -642,4 +652,4 @@ class CheckpointCallbackWithRMS(CheckpointCallback):
 
 
 # Backward-compatible alias (same naming as other wrappers)
-FlightEnvVec = DotFlightEnvVec
+FlightEnvVec = PosFlightEnvVec

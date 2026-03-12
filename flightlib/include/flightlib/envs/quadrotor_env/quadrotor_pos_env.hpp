@@ -116,6 +116,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Vector<3> goal_lin_vel_;
   Vector<3> goal_ang_vel_;
   Scalar landing_w_xy_{1.0};
+  Scalar landing_xy_reward_scale_{0.2};
   Scalar landing_w_z_{1.0};
   Scalar landing_w_vel_xy_near_{0.5};
   Scalar landing_w_vel_xy_far_{0.2};
@@ -130,6 +131,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar landing_tilt_hard_penalty_{2.0};
   Scalar landing_time_penalty_{0.01};
   Scalar landing_w_body_rate_{0.0};
+  Scalar landing_w_action_hover_{0.0};
   Scalar landing_w_rate_cmd_xy_{0.0};
   Scalar landing_w_duv_{0.0};
   Scalar landing_z_safe_margin_{2.0};
@@ -138,7 +140,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar landing_w_speed_excess_{1.0};
   Scalar landing_hard_speed_penalty_{3.0};
   Scalar landing_w_img_center_{0.0};
-  Scalar landing_dot_not_visible_penalty_{0.0};
+  Scalar landing_tag_not_visible_penalty_{0.0};
   Scalar landing_center_u_gate_{0.1};
   Scalar landing_center_v_gate_{0.1};
   Scalar landing_center_hold_bonus_{0.0};
@@ -199,8 +201,8 @@ class QuadrotorPosEnv final : public EnvBase {
   int cam_width_{84};
   int cam_height_{84};
   bool log_missing_rgb_{false};
-  Vector<2> prev_uv_ = Vector<2>::Zero();
-  bool prev_uv_valid_{false};
+  Matrix<4, 2> prev_corner_uv_ = Matrix<4, 2>::Zero();
+  bool prev_corner_uv_valid_{false};
   bool log_world_pose_{false};
   int log_world_pose_interval_steps_{50};
   int world_pose_log_counter_{0};
