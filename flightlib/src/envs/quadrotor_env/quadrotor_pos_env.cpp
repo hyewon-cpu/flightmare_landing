@@ -7,12 +7,12 @@ namespace flightlib {
 namespace {
 
 bool parseTagCenters(const YAML::Node &centers_node,
-                     std::array<Vector<3>, quaddotenv::kNumTags> *centers) {
+                     std::array<Vector<3>, quadposenv::kNumTags> *centers) {
   if (!centers_node || !centers_node.IsSequence() ||
-      static_cast<int>(centers_node.size()) != quaddotenv::kNumTags) {
+      static_cast<int>(centers_node.size()) != quadposenv::kNumTags) {
     return false;
   }
-  for (int i = 0; i < quaddotenv::kNumTags; i++) {
+  for (int i = 0; i < quadposenv::kNumTags; i++) {
     const YAML::Node center = centers_node[i];
     if (!center.IsSequence() || center.size() != 3) return false;
     (*centers)[i] << center[0].as<Scalar>(), center[1].as<Scalar>(),
@@ -22,12 +22,12 @@ bool parseTagCenters(const YAML::Node &centers_node,
 }
 
 bool parseTagCorners(const YAML::Node &corners_node,
-                     std::array<Matrix<3, 4>, quaddotenv::kNumTags> *corners) {
+                     std::array<Matrix<3, 4>, quadposenv::kNumTags> *corners) {
   if (!corners_node || !corners_node.IsSequence() ||
-      static_cast<int>(corners_node.size()) != quaddotenv::kNumTags) {
+      static_cast<int>(corners_node.size()) != quadposenv::kNumTags) {
     return false;
   }
-  for (int tag_idx = 0; tag_idx < quaddotenv::kNumTags; tag_idx++) {
+  for (int tag_idx = 0; tag_idx < quadposenv::kNumTags; tag_idx++) {
     const YAML::Node per_tag = corners_node[tag_idx];
     if (!per_tag.IsSequence() || per_tag.size() != 4) return false;
     for (int corner_idx = 0; corner_idx < 4; corner_idx++) {
@@ -76,8 +76,8 @@ Scalar estimateTagScale(const Matrix<3, 4> &corners) {
 }  // namespace
 
 QuadrotorPosEnv::QuadrotorPosEnv()
-  : QuadrotorDotEnv(getenv("FLIGHTMARE_PATH") +
-                    std::string("/flightlib/configs/quadrotor_dot_env.yaml")) {}
+  : QuadrotorPosEnv(getenv("FLIGHTMARE_PATH") +
+                    std::string("/flightlib/configs/quadrotor_pos_env.yaml")) {}
 
 QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
   : EnvBase()  {
@@ -231,8 +231,8 @@ QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
   };
 
   // define input and output dimension for the environment
-  obs_dim_ = quaddotenv::kNObs;
-  act_dim_ = quaddotenv::kNAct;
+  obs_dim_ = quadposenv::kNObs;
+  act_dim_ = quadposenv::kNAct;
 
   // Select control interpretation from YAML:
   // - motor: [m0, m1, m2, m3] rotor thrust commands
@@ -257,8 +257,8 @@ QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
     act_std_ << hover_acc, omega_max.x(), omega_max.y(), omega_max.z();
   } else {
     Scalar mass = quadrotor_ptr_->getMass();
-    act_mean_ = Vector<quaddotenv::kNAct>::Ones() * (-mass * Gz) / 4;
-    act_std_ = Vector<quaddotenv::kNAct>::Ones() * (-mass * 2 * Gz) / 4;
+    act_mean_ = Vector<quadposenv::kNAct>::Ones() * (-mass * Gz) / 4;
+    act_std_ = Vector<quadposenv::kNAct>::Ones() * (-mass * 2 * Gz) / 4;
   }
 
   // reasonable normalization defaults for [dot_uv, dot_duv + rgb]
@@ -274,7 +274,7 @@ QuadrotorPosEnv::~QuadrotorPosEnv() {}
 bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_state_.setZero();
   quad_obs_.setZero();
-  quad_obs_.segment<quaddotenv::kTagObs>(quaddotenv::kObs).setConstant(-1.0);
+  quad_obs_.segment<quadposenv::kTagObs>(quadposenv::kObs).setConstant(-1.0);
   quad_act_.setZero();
   prev_uv_.setZero();
   prev_uv_valid_ = false;
@@ -405,7 +405,7 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
   quadrotor_ptr_->getState(&quad_state_);
 
   if (!hold_last_tag_obs_) {
-    quad_obs_.segment<quaddotenv::kTagObs>(quaddotenv::kObs).setConstant(-1.0);
+    quad_obs_.segment<quadposenv::kTagObs>(quadposenv::kObs).setConstant(-1.0);
   }
   curr_tag_visible_.fill(false);
 
@@ -448,9 +448,9 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
     }
   }
 
-  const Scalar sx = static_cast<Scalar>(quaddotenv::kImgWidth - 1) /
+  const Scalar sx = static_cast<Scalar>(quadposenv::kImgWidth - 1) /
                     std::max(Scalar(1.0), static_cast<Scalar>(cam_width_ - 1));
-  const Scalar sy = static_cast<Scalar>(quaddotenv::kImgHeight - 1) /
+  const Scalar sy = static_cast<Scalar>(quadposenv::kImgHeight - 1) /
                     std::max(Scalar(1.0), static_cast<Scalar>(cam_height_ - 1));
   auto set_obs_from_center_uv = [&](const Vector<2> &uv_centered, int obs_x_idx) {
     const Scalar px = uv_centered.x() + cx_;
@@ -459,8 +459,8 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
     quad_obs_(obs_x_idx + 1) = py * sy;
   };
 
-  for (int tag_idx = 0; tag_idx < quaddotenv::kNumTags; tag_idx++) {
-    const int obs_base = quaddotenv::kObs + tag_idx * quaddotenv::kTagFeat;
+  for (int tag_idx = 0; tag_idx < quadposenv::kNumTags; tag_idx++) {
+    const int obs_base = quadposenv::kObs + tag_idx * quadposenv::kTagFeat;
     bool center_in_image = false;
     Vector<2> center_uv;
     center_uv.setZero();
@@ -483,12 +483,12 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
       center_projected && center_in_image && all_corners_projected && all_corners_in_image;
     curr_tag_visible_[tag_idx] = tag_visible;
     if (tag_visible) {
-      set_obs_from_center_uv(center_uv, obs_base + quaddotenv::kCenterX);
-      set_obs_from_center_uv(corner_uv[0], obs_base + quaddotenv::kCorner0X);
-      set_obs_from_center_uv(corner_uv[1], obs_base + quaddotenv::kCorner1X);
-      set_obs_from_center_uv(corner_uv[2], obs_base + quaddotenv::kCorner2X);
-      set_obs_from_center_uv(corner_uv[3], obs_base + quaddotenv::kCorner3X);
-      quad_obs_(obs_base + quaddotenv::kTagId) = static_cast<Scalar>(tag_idx);
+      set_obs_from_center_uv(center_uv, obs_base + quadposenv::kCenterX);
+      set_obs_from_center_uv(corner_uv[0], obs_base + quadposenv::kCorner0X);
+      set_obs_from_center_uv(corner_uv[1], obs_base + quadposenv::kCorner1X);
+      set_obs_from_center_uv(corner_uv[2], obs_base + quadposenv::kCorner2X);
+      set_obs_from_center_uv(corner_uv[3], obs_base + quadposenv::kCorner3X);
+      quad_obs_(obs_base + quadposenv::kTagId) = static_cast<Scalar>(tag_idx);
     }
   }
 
@@ -496,15 +496,15 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
   if (rgb_camera_ != nullptr && rgb_camera_->getRGBImage(rgb_image) &&
       !rgb_image.empty()) {
     cv::Mat resized = rgb_image;
-    if (rgb_image.cols != quaddotenv::kImgWidth ||
-        rgb_image.rows != quaddotenv::kImgHeight) {
+    if (rgb_image.cols != quadposenv::kImgWidth ||
+        rgb_image.rows != quadposenv::kImgHeight) {
       cv::resize(rgb_image, resized,
-                 cv::Size(quaddotenv::kImgWidth, quaddotenv::kImgHeight), 0.0, 0.0,
+                 cv::Size(quadposenv::kImgWidth, quadposenv::kImgHeight), 0.0, 0.0,
                  cv::INTER_AREA);
     }
     if (!resized.isContinuous()) resized = resized.clone();
 
-    int flat_idx = quaddotenv::kImg;
+    int flat_idx = quadposenv::kImg;
     for (int r = 0; r < resized.rows; r++) {
       const cv::Vec3b *row = resized.ptr<cv::Vec3b>(r);
       for (int c = 0; c < resized.cols; c++) {
@@ -515,7 +515,7 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
     }
   }
 
-  obs.segment<quaddotenv::kNObs>(quaddotenv::kObs) = quad_obs_;
+  obs.segment<quadposenv::kNObs>(quadposenv::kObs) = quad_obs_;
   return true;
 }
 
@@ -572,19 +572,19 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   }
 
   // ---------------------- stage-based multi-tag reward (largest -> middle -> smallest)
-  const Scalar half_w = static_cast<Scalar>(quaddotenv::kImgWidth - 1) * 0.5;
-  const Scalar half_h = static_cast<Scalar>(quaddotenv::kImgHeight - 1) * 0.5;
+  const Scalar half_w = static_cast<Scalar>(quadposenv::kImgWidth - 1) * 0.5;
+  const Scalar half_h = static_cast<Scalar>(quadposenv::kImgHeight - 1) * 0.5;
   const Scalar eps = 1e-6;
-  const int active_slot = std::max(0, std::min(stage_, quaddotenv::kNumTags - 1)); //현재 stage에 해당하는 QR코드 인덱스 (0, 1, 2)
+  const int active_slot = std::max(0, std::min(stage_, quadposenv::kNumTags - 1)); //현재 stage에 해당하는 QR코드 인덱스 (0, 1, 2)
   const int active_tag_idx = stage_switch_enabled_ ? tag_order_[active_slot] : 0; //stage switch 비활성화 시 항상 tag 0 사용
   //tag_order_ :  stage마다 reward 계산에 사용할 QR 태그의 순서를 정의하는 배열. 예를 들어, tag_order_ = {2, 0, 1}이면, stage 0에서는 tag 2가 active_tag_idx가 되고, stage 1에서는 tag 0이 active_tag_idx가 되고, stage 2에서는 tag 1이 active_tag_idx가 됨
-  const int active_base = active_tag_idx * quaddotenv::kTagFeat; //active_base : quad_obs_에서 현재 active_tag_idx에 해당하는 QR 코드 관측치의 시작 인덱스. 
+  const int active_base = active_tag_idx * quadposenv::kTagFeat; //active_base : quad_obs_에서 현재 active_tag_idx에 해당하는 QR 코드 관측치의 시작 인덱스. 
   // 예를 들어, active_tag_idx가 1이면, active_base는 1 * kTagFeat가 되어, quad_obs_에서 tag 1의 관측치가 시작되는 인덱스를 가리킴.
   //kTagFeat = QR 1개당 필요한 관측치 수 (center + 4 corners + tag id)- 11개.
 
   const bool tag_visible = curr_tag_visible_[active_tag_idx];
   const bool corners_visible = curr_tag_visible_[active_tag_idx];
-    //quad_obs_ = QuadrotorDotEnv 내부에서 쓰는 관측 벡터 버퍼 . Vector<quaddotenv::kNObs>. 태그 투영값들 + RGB 펼친 값
+    //quad_obs_ = QuadrotorDotEnv 내부에서 쓰는 관측 벡터 버퍼 . Vector<quadposenv::kNObs>. 태그 투영값들 + RGB 펼친 값
     //매 step/reset 때 getObs()에서 채운 뒤, 최종 obs로 복사됩니다.
 
   Scalar r_vis = tag_visible ? 1.0 : -1.0;
@@ -601,21 +601,21 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   Scalar observed_area = -1.0; // active tag 면적(관측 불가 시 -1)
 
   if (tag_visible && corners_visible) {
-    const Scalar cx = quad_obs_(active_base + quaddotenv::kCenterX); //tag center의 x 좌표
-    const Scalar cy = quad_obs_(active_base + quaddotenv::kCenterY); //tag center의 y 좌표
+    const Scalar cx = quad_obs_(active_base + quadposenv::kCenterX); //tag center의 x 좌표
+    const Scalar cy = quad_obs_(active_base + quadposenv::kCenterY); //tag center의 y 좌표
     const Scalar ex = (cx - half_w) / std::max(half_w, eps); //tag center의 x 좌표가 이미지 중심에서 멀어질수록 ex의 절댓값이 커짐. half_w로 나누어서 정규화 (0~1 사이). eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar ey = (cy - half_h) / std::max(half_h, eps); //tag center의 y 좌표가 이미지 중심에서 멀어질수록 ey의 절댓값이 커짐. half_h로 나누어서 정규화 (0~1 사이). eps는 0으로 나누는 것을 방지하기 위한 작은 값
     const Scalar e_center = std::sqrt(ex * ex + ey * ey);
     r_center = -e_center;
 
-    const Scalar x0 = quad_obs_(active_base + quaddotenv::kCorner0X); //코너0의 x 좌표
-    const Scalar y0 = quad_obs_(active_base + quaddotenv::kCorner0Y); //코너0의 y 좌표
-    const Scalar x1 = quad_obs_(active_base + quaddotenv::kCorner1X);
-    const Scalar y1 = quad_obs_(active_base + quaddotenv::kCorner1Y);
-    const Scalar x2 = quad_obs_(active_base + quaddotenv::kCorner2X);
-    const Scalar y2 = quad_obs_(active_base + quaddotenv::kCorner2Y);
-    const Scalar x3 = quad_obs_(active_base + quaddotenv::kCorner3X);
-    const Scalar y3 = quad_obs_(active_base + quaddotenv::kCorner3Y);
+    const Scalar x0 = quad_obs_(active_base + quadposenv::kCorner0X); //코너0의 x 좌표
+    const Scalar y0 = quad_obs_(active_base + quadposenv::kCorner0Y); //코너0의 y 좌표
+    const Scalar x1 = quad_obs_(active_base + quadposenv::kCorner1X);
+    const Scalar y1 = quad_obs_(active_base + quadposenv::kCorner1Y);
+    const Scalar x2 = quad_obs_(active_base + quadposenv::kCorner2X);
+    const Scalar y2 = quad_obs_(active_base + quadposenv::kCorner2Y);
+    const Scalar x3 = quad_obs_(active_base + quadposenv::kCorner3X);
+    const Scalar y3 = quad_obs_(active_base + quadposenv::kCorner3Y);
 
     const Scalar area_twice =
       x0 * y1 + x1 * y2 + x2 * y3 + x3 * y0 -
@@ -711,19 +711,19 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     miss_start_prev_area_ = -1.0;
   }
   Scalar r_switch = 0.0;
-  if (stage_switch_enabled_ && stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
+  if (stage_switch_enabled_ && stage_ < (quadposenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
     bool can_advance = false;
     {
       const bool active_corners_visible = curr_tag_visible_[active_tag_idx];
       if (active_corners_visible) { //4개 코너가 모두 보이는 경우에만 다음 stage로 넘어갈 수 있는지 평가. 4개 코너 중 하나라도 보이지 않으면 다음 stage로 넘어갈 수 없음
-        const Scalar ax0 = quad_obs_(active_base + quaddotenv::kCorner0X);
-        const Scalar ay0 = quad_obs_(active_base + quaddotenv::kCorner0Y);
-        const Scalar ax1 = quad_obs_(active_base + quaddotenv::kCorner1X);
-        const Scalar ay1 = quad_obs_(active_base + quaddotenv::kCorner1Y);
-        const Scalar ax2 = quad_obs_(active_base + quaddotenv::kCorner2X);
-        const Scalar ay2 = quad_obs_(active_base + quaddotenv::kCorner2Y);
-        const Scalar ax3 = quad_obs_(active_base + quaddotenv::kCorner3X);
-        const Scalar ay3 = quad_obs_(active_base + quaddotenv::kCorner3Y);
+        const Scalar ax0 = quad_obs_(active_base + quadposenv::kCorner0X);
+        const Scalar ay0 = quad_obs_(active_base + quadposenv::kCorner0Y);
+        const Scalar ax1 = quad_obs_(active_base + quadposenv::kCorner1X);
+        const Scalar ay1 = quad_obs_(active_base + quadposenv::kCorner1Y);
+        const Scalar ax2 = quad_obs_(active_base + quadposenv::kCorner2X);
+        const Scalar ay2 = quad_obs_(active_base + quadposenv::kCorner2Y);
+        const Scalar ax3 = quad_obs_(active_base + quadposenv::kCorner3X);
+        const Scalar ay3 = quad_obs_(active_base + quadposenv::kCorner3Y);
         const Scalar active_area_twice =
           ax0 * ay1 + ax1 * ay2 + ax2 * ay3 + ax3 * ay0 -
           (ay0 * ax1 + ay1 * ax2 + ay2 * ax3 + ay3 * ax0);
@@ -848,7 +848,7 @@ bool QuadrotorPosEnv::isTerminalState(Scalar &reward) {
   // Ground plane is assumed around z=3.0.
   if (quad_state_.x(QS::POSZ) <= landing_terminal_z_) {
     const int terminal_tag_idx =
-      stage_switch_enabled_ ? tag_order_[quaddotenv::kNumTags - 1] : 0;
+      stage_switch_enabled_ ? tag_order_[quadposenv::kNumTags - 1] : 0;
     const Scalar xy_error =
       (quad_state_.p.head<2>() - tag_center_world_[terminal_tag_idx].head<2>()).norm();
     const Scalar vxy = quad_state_.v.head<2>().norm();
@@ -977,15 +977,15 @@ bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
         cfg["quadrotor_env"]["camera"]["log_world_pose_interval_steps"].as<int>());
     }
     // Sort tags by physical size (largest -> smallest) for stage progression.
-    std::array<std::pair<Scalar, int>, quaddotenv::kNumTags> scales;
-    for (int i = 0; i < quaddotenv::kNumTags; i++) {
+    std::array<std::pair<Scalar, int>, quadposenv::kNumTags> scales;
+    for (int i = 0; i < quadposenv::kNumTags; i++) {
       scales[i] = {estimateTagScale(tag_corner_world_[i]), i};
     }
     std::sort(scales.begin(), scales.end(),
               [](const std::pair<Scalar, int> &a, const std::pair<Scalar, int> &b) {
                 return a.first > b.first;
               });
-    for (int i = 0; i < quaddotenv::kNumTags; i++) {
+    for (int i = 0; i < quadposenv::kNumTags; i++) {
       tag_order_[i] = scales[i].second;
     }
   } else {
@@ -1040,8 +1040,8 @@ bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
     }
     if (cfg["rl"]["stage_target_area"] &&
         cfg["rl"]["stage_target_area"].IsSequence() &&
-        cfg["rl"]["stage_target_area"].size() == quaddotenv::kNumTags) {
-      for (int i = 0; i < quaddotenv::kNumTags; i++) {
+        cfg["rl"]["stage_target_area"].size() == quadposenv::kNumTags) {
+      for (int i = 0; i < quadposenv::kNumTags; i++) {
         stage_target_area_[i] = cfg["rl"]["stage_target_area"][i].as<Scalar>();
       }
     }

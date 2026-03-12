@@ -296,10 +296,24 @@ CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_env.cpp -o CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.s
 
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o: CMakeFiles/flightlib.dir/flags.make
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o: /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building CXX object CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o -MF CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o.d -o CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o -c /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp
+
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp > CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.i
+
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp -o CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.s
+
 CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o: /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_vis_env.cpp
 CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building CXX object CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building CXX object CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o -MF CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o.d -o CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o -c /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_vis_env.cpp
 
 CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.i: cmake_force
@@ -313,7 +327,7 @@ CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.s: cmake_f
 CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o: /home/flightmare_develop/flightlib/src/envs/test_env.cpp
 CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building CXX object CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building CXX object CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o -MF CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o.d -o CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o -c /home/flightmare_develop/flightlib/src/envs/test_env.cpp
 
 CMakeFiles/flightlib.dir/src/envs/test_env.cpp.i: cmake_force
@@ -327,7 +341,7 @@ CMakeFiles/flightlib.dir/src/envs/test_env.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o: /home/flightmare_develop/flightlib/src/envs/vec_env.cpp
 CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building CXX object CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building CXX object CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o -MF CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o.d -o CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o -c /home/flightmare_develop/flightlib/src/envs/vec_env.cpp
 
 CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.i: cmake_force
@@ -341,7 +355,7 @@ CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o: /home/flightmare_develop/flightlib/src/objects/object_base.cpp
 CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building CXX object CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building CXX object CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o -MF CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o.d -o CMakeFiles/flightlib.dir/src/objects/object_base.cpp.o -c /home/flightmare_develop/flightlib/src/objects/object_base.cpp
 
 CMakeFiles/flightlib.dir/src/objects/object_base.cpp.i: cmake_force
@@ -355,7 +369,7 @@ CMakeFiles/flightlib.dir/src/objects/object_base.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o: /home/flightmare_develop/flightlib/src/objects/quadrotor.cpp
 CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building CXX object CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o -MF CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o.d -o CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.o -c /home/flightmare_develop/flightlib/src/objects/quadrotor.cpp
 
 CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.i: cmake_force
@@ -369,7 +383,7 @@ CMakeFiles/flightlib.dir/src/objects/quadrotor.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o: /home/flightmare_develop/flightlib/src/objects/unity_camera.cpp
 CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o -MF CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o.d -o CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.o -c /home/flightmare_develop/flightlib/src/objects/unity_camera.cpp
 
 CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.i: cmake_force
@@ -383,7 +397,7 @@ CMakeFiles/flightlib.dir/src/objects/unity_camera.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o: /home/flightmare_develop/flightlib/src/sensors/imu.cpp
 CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o -MF CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o.d -o CMakeFiles/flightlib.dir/src/sensors/imu.cpp.o -c /home/flightmare_develop/flightlib/src/sensors/imu.cpp
 
 CMakeFiles/flightlib.dir/src/sensors/imu.cpp.i: cmake_force
@@ -397,7 +411,7 @@ CMakeFiles/flightlib.dir/src/sensors/imu.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o: /home/flightmare_develop/flightlib/src/sensors/rgb_camera.cpp
 CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o -MF CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o.d -o CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o -c /home/flightmare_develop/flightlib/src/sensors/rgb_camera.cpp
 
 CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.i: cmake_force
@@ -411,7 +425,7 @@ CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.s: cmake_force
 CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o: CMakeFiles/flightlib.dir/flags.make
 CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o: /home/flightmare_develop/flightlib/src/sensors/sensor_base.cpp
 CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o: CMakeFiles/flightlib.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building CXX object CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o -MF CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o.d -o CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o -c /home/flightmare_develop/flightlib/src/sensors/sensor_base.cpp
 
 CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.i: cmake_force
@@ -440,6 +454,7 @@ flightlib_OBJECTS = \
 "CMakeFiles/flightlib.dir/src/envs/env_base.cpp.o" \
 "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o" \
 "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o" \
+"CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o" \
 "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o" \
 "CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o" \
 "CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o" \
@@ -469,6 +484,7 @@ libflightlib.a: CMakeFiles/flightlib.dir/src/dynamics/quadrotor_dynamics.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/env_base.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o
+libflightlib.a: CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o
@@ -480,7 +496,7 @@ libflightlib.a: CMakeFiles/flightlib.dir/src/sensors/rgb_camera.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/src/sensors/sensor_base.cpp.o
 libflightlib.a: CMakeFiles/flightlib.dir/build.make
 libflightlib.a: CMakeFiles/flightlib.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Linking CXX static library libflightlib.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/flightmare_develop/flightlib/build_local/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Linking CXX static library libflightlib.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/flightlib.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/flightlib.dir/link.txt --verbose=$(VERBOSE)
 

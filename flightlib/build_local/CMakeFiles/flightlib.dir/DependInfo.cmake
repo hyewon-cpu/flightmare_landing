@@ -24,6 +24,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/flightmare_develop/flightlib/src/envs/env_base.cpp" "CMakeFiles/flightlib.dir/src/envs/env_base.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/env_base.cpp.o.d"
   "/home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_dot_env.cpp" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o.d"
   "/home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_env.cpp" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o.d"
+  "/home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o.d"
   "/home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_vis_env.cpp" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o.d"
   "/home/flightmare_develop/flightlib/src/envs/test_env.cpp" "CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o.d"
   "/home/flightmare_develop/flightlib/src/envs/vec_env.cpp" "CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o" "gcc" "CMakeFiles/flightlib.dir/src/envs/vec_env.cpp.o.d"

@@ -31,6 +31,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o.d"
   "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o"
   "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_env.cpp.o.d"
+  "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o"
+  "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o.d"
   "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o"
   "CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_vis_env.cpp.o.d"
   "CMakeFiles/flightlib.dir/src/envs/test_env.cpp.o"

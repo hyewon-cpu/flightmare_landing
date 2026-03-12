@@ -1,7 +1,7 @@
-CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_dot_env.cpp.o: \
- /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_dot_env.cpp \
+CMakeFiles/flightlib.dir/src/envs/quadrotor_env/quadrotor_pos_env.cpp.o: \
+ /home/flightmare_develop/flightlib/src/envs/quadrotor_env/quadrotor_pos_env.cpp \
  /usr/include/stdc-predef.h \
- /home/flightmare_develop/flightlib/include/flightlib/envs/quadrotor_env/quadrotor_dot_env.hpp \
+ /home/flightmare_develop/flightlib/include/flightlib/envs/quadrotor_env/quadrotor_pos_env.hpp \
  /usr/include/c++/9/array /usr/include/c++/9/utility \
  /usr/include/x86_64-linux-gnu/c++/9/bits/c++config.h \
  /usr/include/x86_64-linux-gnu/c++/9/bits/os_defines.h \

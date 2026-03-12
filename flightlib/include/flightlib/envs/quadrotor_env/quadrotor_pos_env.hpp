@@ -63,9 +63,9 @@ class QuadrotorPosEnv final : public EnvBase {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  QuadrotorDotEnv();
-  QuadrotorDotEnv(const std::string &cfg_path);
-  ~QuadrotorDotEnv();
+  QuadrotorPosEnv();
+  QuadrotorPosEnv(const std::string &cfg_path);
+  ~QuadrotorPosEnv();
 
   // - public OpenAI-gym-style functions
   bool reset(Ref<Vector<>> obs, const bool random = true) override;
@@ -88,7 +88,7 @@ class QuadrotorPosEnv final : public EnvBase {
   void addObjectsToUnity(std::shared_ptr<UnityBridge> bridge);
 
   friend std::ostream &operator<<(std::ostream &os,
-                                  const QuadrotorDotEnv &quad_env);
+                                  const QuadrotorPosEnv &quad_env);
 
  private:
   bool projectWorldPointToImage(const Ref<const Vector<3>> p_W,
@@ -100,7 +100,7 @@ class QuadrotorPosEnv final : public EnvBase {
   std::shared_ptr<Quadrotor> quadrotor_ptr_;
   QuadState quad_state_;
   Command cmd_;
-  Logger logger_{"QaudrotorDotEnv"};
+  Logger logger_{"QuadrotorPosEnv"};
 
   // Define reward for training
   Scalar pos_coeff_, ori_coeff_, lin_vel_coeff_, ang_vel_coeff_, act_coeff_;

@@ -35,8 +35,9 @@ import tonedio_baselines.common.util as U
 from flightgym import QuadrotorDotEnv_v1
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import VecMonitor
+from stable_baselines3.common.vec_env import VecMonitor, sync_envs_normalization
 from stable_baselines3.common.callbacks import EvalCallback, CallbackList, CheckpointCallback, BaseCallback
+from stable_baselines3.common.evaluation import evaluate_policy
 
 import wandb
 from wandb.integration.sb3 import WandbCallback
@@ -81,6 +82,8 @@ def parser():
                         help="Random seed")
     parser.add_argument('-w', '--weight', type=str, default=None,
                         help='trained weight path name')
+    parser.add_argument('-m', '--model_type', type=str, default="final",
+                        help='model type to use for testing (best, final, custom)')
     
     # eval freq, model_save_freq 모두 timestep 기준
     parser.add_argument('--total_timesteps', type=int, default=25_000_000,
@@ -101,6 +104,10 @@ def parser():
     parser.add_argument('--use_obs_norm', type=int, default=0, help="Use observation normalization (1=True, 0=False)")
     parser.add_argument('--include_prev_action', type=int, default=0,
                         help="Append previous action to policy observation (1=True, 0=False)")
+    parser.add_argument('--include_area_obs', type=int, default=1,
+                        help="Include area feature in PPO observation when available (1=True, 0=False)")
+    parser.add_argument('--include_shape_obs', type=int, default=1,
+                        help="Include shape feature in PPO observation when available (1=True, 0=False)")
     parser.add_argument('--rms_path', type=str, default=None, 
                         help="Path to normalization statistics (.npz file) for testing. "
                              "If None, will try to find RMS file from checkpoint directory.")
@@ -152,12 +159,16 @@ def build_env(
     use_obs_norm=True,
     include_prev_action=True,
     stage_switch_enabled=True,
+    include_area_obs=True,
+    include_shape_obs=True,
 ):
     env = wrapper.DotFlightEnvVec(   
         QuadrotorDotEnv_v1(cfg_yaml_str, False),
         use_obs_norm=use_obs_norm,
         include_prev_action=bool(include_prev_action),
         stage_switch_enabled=bool(stage_switch_enabled),
+        include_area_obs=bool(include_area_obs),
+        include_shape_obs=bool(include_shape_obs),
     )
     env = VecMonitor(env)  # SB3 전용 래퍼. 에피소드 통계를 자동 기록. episode 끝날때  info 에 길이/리턴 같은 통계를 넣음. 이걸 Tensorboard 에서 집계함 
     # VecMonitor는 episode가 끝날 때마다 정보 업데이트. 
@@ -410,6 +421,111 @@ class WandbExtraInfoCallback(BaseCallback):
         return True
 
 
+class MeanRewardPerStepEvalCallback(EvalCallback):
+    """
+    Eval callback that saves best model using mean(reward / episode_length) as criterion.
+    It also keeps standard EvalCallback logging for mean reward and episode length.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.best_mean_reward_per_step = -np.inf
+        self.last_mean_reward_per_step = -np.inf
+
+    def _on_step(self) -> bool:
+        continue_training = True
+
+        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            if self.model.get_vec_normalize_env() is not None:
+                try:
+                    sync_envs_normalization(self.training_env, self.eval_env)
+                except AttributeError as e:
+                    raise AssertionError(
+                        "Training and eval env are not wrapped the same way. "
+                        "See https://stable-baselines3.readthedocs.io/en/master/guide/callbacks.html#evalcallback"
+                    ) from e
+
+            self._is_success_buffer = []
+            episode_rewards, episode_lengths = evaluate_policy(
+                self.model,
+                self.eval_env,
+                n_eval_episodes=self.n_eval_episodes,
+                render=self.render,
+                deterministic=self.deterministic,
+                return_episode_rewards=True,
+                warn=self.warn,
+                callback=self._log_success_callback,
+            )
+
+            if self.log_path is not None:
+                self.evaluations_timesteps.append(self.num_timesteps)
+                self.evaluations_results.append(episode_rewards)
+                self.evaluations_length.append(episode_lengths)
+
+                kwargs = {}
+                if len(self._is_success_buffer) > 0:
+                    self.evaluations_successes.append(self._is_success_buffer)
+                    kwargs = {"successes": self.evaluations_successes}
+
+                np.savez(
+                    self.log_path,
+                    timesteps=self.evaluations_timesteps,
+                    results=self.evaluations_results,
+                    ep_lengths=self.evaluations_length,
+                    **kwargs,
+                )
+
+            mean_reward = float(np.mean(episode_rewards))
+            std_reward = float(np.std(episode_rewards))
+            mean_ep_length = float(np.mean(episode_lengths))
+            std_ep_length = float(np.std(episode_lengths))
+
+            reward_per_step = np.asarray(episode_rewards, dtype=np.float64) / np.maximum(
+                np.asarray(episode_lengths, dtype=np.float64), 1.0
+            )
+            mean_reward_per_step = float(np.mean(reward_per_step))
+            std_reward_per_step = float(np.std(reward_per_step))
+
+            self.last_mean_reward = mean_reward
+            self.last_mean_reward_per_step = mean_reward_per_step
+
+            if self.verbose >= 1:
+                print(f"Eval num_timesteps={self.num_timesteps}, episode_reward={mean_reward:.2f} +/- {std_reward:.2f}")
+                print(f"Episode length: {mean_ep_length:.2f} +/- {std_ep_length:.2f}")
+                print(
+                    f"Reward/step: {mean_reward_per_step:.6f} +/- {std_reward_per_step:.6f} "
+                    f"(best: {self.best_mean_reward_per_step:.6f})"
+                )
+
+            self.logger.record("eval/mean_reward", mean_reward)
+            self.logger.record("eval/mean_ep_length", mean_ep_length)
+            self.logger.record("eval/mean_reward_per_step", mean_reward_per_step)
+
+            if len(self._is_success_buffer) > 0:
+                success_rate = float(np.mean(self._is_success_buffer))
+                if self.verbose >= 1:
+                    print(f"Success rate: {100 * success_rate:.2f}%")
+                self.logger.record("eval/success_rate", success_rate)
+
+            self.logger.record("time/total_timesteps", self.num_timesteps, exclude="tensorboard")
+            self.logger.dump(self.num_timesteps)
+
+            if mean_reward_per_step > self.best_mean_reward_per_step:
+                if self.verbose >= 1:
+                    print("New best mean reward/step!")
+                if self.best_model_save_path is not None:
+                    self.model.save(os.path.join(self.best_model_save_path, "best_model"))
+                self.best_mean_reward = mean_reward
+                self.best_mean_reward_per_step = mean_reward_per_step
+                if self.callback_on_new_best is not None:
+                    continue_training = self.callback_on_new_best.on_step()
+
+            if self.callback is not None:
+                continue_training = continue_training and self._on_event()
+
+        return continue_training
+
+
 def main():
     args = parser().parse_args()
     print(f"[Debug] running script: {os.path.realpath(__file__)}")
@@ -450,13 +566,20 @@ def main():
     # main env
     use_obs_norm = bool(args.use_obs_norm)
     include_prev_action = bool(args.include_prev_action)
+    include_area_obs = bool(args.include_area_obs)
+    include_shape_obs = bool(args.include_shape_obs)
     stage_switch_enabled = get_stage_switch_enabled()
-    print(f"[Config] rl.stage_switch_enabled={stage_switch_enabled}")
+    print(
+        f"[Config] rl.stage_switch_enabled={stage_switch_enabled}, "
+        f"include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}"
+    )
     env = build_env(
         cfg_yaml_str,
         use_obs_norm=use_obs_norm,
         include_prev_action=include_prev_action,
         stage_switch_enabled=stage_switch_enabled,
+        include_area_obs=include_area_obs,
+        include_shape_obs=include_shape_obs,
     )
     unity_connected = False
     if need_unity_camera:
@@ -498,10 +621,12 @@ def main():
             "total_timesteps": args.total_timesteps,
             "use_obs_norm": use_obs_norm,
             "include_prev_action": include_prev_action,
+            "include_area_obs": include_area_obs,
+            "include_shape_obs": include_shape_obs,
             "stage_switch_enabled": stage_switch_enabled,
             "tag_center_coefficient" : cfg2["rl"].get("tag_center_coefficient", "not defined"),
-            "tag_area_coeff" : cf2["rl"].get("tag_area_coefficient", "not defined"),
-            "tag_shape2_coeff" : cf22["rl"].get("tag_shape2_coefficient", "not defined"),
+            "tag_area_coeff" : cfg2["rl"].get("tag_area_coefficient", "not defined"),
+            "tag_shape2_coeff" : cfg2["rl"].get("tag_shape2_coefficient", "not defined"),
             "landing_w_xy" : cfg2["rl"].get("landing_w_xy", "not defined"),
             "tag_shape_coeff" : cfg2["rl"].get("tag_shape_coeff", "not defined"),
             "tag_area_small_coeff" : cfg2["rl"].get("tag_area_small_coeff", "not defined"),
@@ -593,8 +718,10 @@ def main():
                 use_obs_norm=use_obs_norm,
                 include_prev_action=include_prev_action,
                 stage_switch_enabled=stage_switch_enabled,
+                include_area_obs=include_area_obs,
+                include_shape_obs=include_shape_obs,
             )
-            eval_callback = EvalCallback(
+            eval_callback = MeanRewardPerStepEvalCallback(
                 eval_env,
                 best_model_save_path=os.path.join(saver.data_dir, "best_model"),
                 log_path=os.path.join(saver.data_dir, "eval_logs"),
@@ -703,12 +830,20 @@ def main():
 
     else:
         # Test mode (simple loop)
-        model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints/ppo_model_100000000_steps.zip') 
+        if args.model_type == "best":
+            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/best_model/best_model.zip')
+        if args.model_type == "final":
+            find_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints')
+            latest_checkpoint = max([f for f in os.listdir(find_path) if f.startswith('ppo_model_') and f.endswith('_steps.zip')], key=lambda x: int(x.split('_')[2]))
+            model_path = os.path.join(find_path, latest_checkpoint)
+        elif args.model_type == "custom":
+            checkpoint_num = input("Checkpoint Number:")
+            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'saved/{args.weight}/checkpoints/ppo_model_{checkpoint_num}_steps')
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled
         if use_obs_norm:
-            rms_path = args.rms_path
+            rms_path = args.rms_path 
             if rms_path is None:
                 # Try to find RMS file from checkpoint directory
                 checkpoint_dir = model_path

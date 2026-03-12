@@ -1,6 +1,7 @@
 #include "flightlib/envs/vec_env.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_vis_env.hpp"
 #include "flightlib/envs/quadrotor_env/quadrotor_dot_env.hpp"
+#include "flightlib/envs/quadrotor_env/quadrotor_pos_env.hpp"
 #include <cmath>
 
 namespace flightlib {
@@ -288,5 +289,6 @@ bool VecEnv<EnvBase>::getTruncationEnabled(void) const { // hj added
 template class VecEnv<QuadrotorEnv>;
 template class VecEnv<QuadrotorVisEnv>;
 template class VecEnv<QuadrotorDotEnv>;
+template class VecEnv<QuadrotorPosEnv>;
 
 }  // namespace flightlib

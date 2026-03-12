@@ -33,6 +33,8 @@ class DotFlightEnvVec(VecEnv):
         use_obs_norm: bool = True,
         include_prev_action: bool = False,
         stage_switch_enabled: bool = True,
+        include_area_obs: bool = True,
+        include_shape_obs: bool = True,
     ):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
@@ -43,6 +45,8 @@ class DotFlightEnvVec(VecEnv):
         self.use_obs_norm = use_obs_norm
         self.include_prev_action = bool(include_prev_action)
         self.stage_switch_enabled = bool(stage_switch_enabled)
+        self.include_area_obs = bool(include_area_obs)
+        self.include_shape_obs = bool(include_shape_obs)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -52,9 +56,9 @@ class DotFlightEnvVec(VecEnv):
         self._reward_obs_indices = []
         area_key = "metric_area" if "metric_area" in self._extraInfoNameToIdx else "reward_area"
         shape_key = "metric_shape2" if "metric_shape2" in self._extraInfoNameToIdx else "reward_shape2"
-        if area_key in self._extraInfoNameToIdx:
+        if self.include_area_obs and area_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[area_key])
-        if shape_key in self._extraInfoNameToIdx:
+        if self.include_shape_obs and shape_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[shape_key])
         self._reward_obs_dim = len(self._reward_obs_indices)
         self._image_dim = self.IMG_HEIGHT * self.IMG_WIDTH * self.IMG_CHANNELS
@@ -149,6 +153,8 @@ class DotFlightEnvVec(VecEnv):
             f"dot_uv_dim={self._dot_uv_dim if self._is_dot_image_obs else 0}, "
             f"policy_dot_uv_dim={self._policy_dot_uv_dim if self._is_dot_image_obs else 0}, "
             f"reward_obs_dim={self._reward_obs_dim if self._is_dot_image_obs else 0}, "
+            f"include_area_obs={self.include_area_obs}, "
+            f"include_shape_obs={self.include_shape_obs}, "
             f"stage_switch_enabled={self.stage_switch_enabled}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
             f"include_prev_action={self._append_prev_action}"

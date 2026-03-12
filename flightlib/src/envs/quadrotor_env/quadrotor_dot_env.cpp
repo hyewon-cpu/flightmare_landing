@@ -800,11 +800,18 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   last_tag_visible_ = tag_visible;
   last_corners_visible_ = corners_visible;
 
+  const Vector<3> euler_zyx_log =
+    quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
+  const Scalar yaw_log = euler_zyx_log(0);
+  const Scalar pitch_log = euler_zyx_log(1);
+  const Scalar roll_log = euler_zyx_log(2);
+
   log_counter_++;
   if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
     logger_.info(
-      "quad pos | x=%.3f y=%.3f z=%.3f",
-      quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ));
+      "quad pos | x=%.3f y=%.3f z=%.3f yaw=%.4f pitch=%.4f roll=%.4f",
+      quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ),
+      yaw_log, pitch_log, roll_log);
     logger_.info(
       "tag area | stage=%d active_tag=%d visible=%d corners=%d area=%.3f target=%.3f",
       stage_, active_tag_idx, static_cast<int>(tag_visible),
@@ -829,17 +836,36 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
     (quad_state_.x(QS::POSZ) <= world_box_(2, 0)+0.001) ||
     (quad_state_.x(QS::POSZ) >= world_box_(2, 1)-0.001);
   if (hit_world_box) {
+    logger_.warn(
+      "terminate reason=world_box "
+      "pos=(" + std::to_string(quad_state_.x(QS::POSX)) + ", " +
+      std::to_string(quad_state_.x(QS::POSY)) + ", " +
+      std::to_string(quad_state_.x(QS::POSZ)) + ") "
+      "box=[(" + std::to_string(world_box_(0, 0)) + ", " +
+      std::to_string(world_box_(0, 1)) + "), (" +
+      std::to_string(world_box_(1, 0)) + ", " +
+      std::to_string(world_box_(1, 1)) + "), (" +
+      std::to_string(world_box_(2, 0)) + ", " +
+      std::to_string(world_box_(2, 1)) + ")]");
     reward = landing_failure_reward_;
     return true;
   }
 
-  // Early terminate on excessive tilt (flip-like behavior).
+  // Early terminate on excessive attitude using raw pitch/roll.
   {
     const Vector<3> euler_zyx =
       quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
-    const Scalar tilt = std::sqrt(
-      euler_zyx(1) * euler_zyx(1) + euler_zyx(2) * euler_zyx(2));
-    if (tilt > landing_tilt_hard_) {
+    const Scalar pitch_abs = std::abs(euler_zyx(1));
+    const Scalar roll_abs = std::abs(euler_zyx(2));
+    if (pitch_abs > landing_tilt_hard_ || roll_abs > landing_tilt_hard_) {
+      logger_.warn(
+        "terminate reason=attitude_limit "
+        "yaw=" + std::to_string(euler_zyx(0)) +
+        " pitch=" + std::to_string(euler_zyx(1)) +
+        " roll=" + std::to_string(euler_zyx(2)) +
+        " pitch_abs=" + std::to_string(pitch_abs) +
+        " roll_abs=" + std::to_string(roll_abs) +
+        " threshold=" + std::to_string(landing_tilt_hard_));
       reward = landing_tilt_hard_penalty_;
       return true;
     }
@@ -856,14 +882,29 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
     const Scalar body_rate = quad_state_.w.norm();
     const Vector<3> euler_zyx =
       quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
-    const Scalar tilt = std::sqrt(
-      euler_zyx(1) * euler_zyx(1) + euler_zyx(2) * euler_zyx(2));
+    const Scalar pitch_abs = std::abs(euler_zyx(1));
+    const Scalar roll_abs = std::abs(euler_zyx(2));
 
     const bool success = (xy_error < landing_success_xy_error_) &&
                          (vxy < landing_success_vxy_) &&
                          (vz < landing_success_vz_) &&
-                         (tilt < landing_success_tilt_) &&
+                         (pitch_abs < landing_success_tilt_) &&
+                         (roll_abs < landing_success_tilt_) &&
                          (body_rate < landing_success_body_rate_);
+    logger_.warn(
+      std::string("terminate reason=landing_terminal ") +
+      (success ? "result=success " : "result=failure ") +
+      "z=" + std::to_string(quad_state_.x(QS::POSZ)) +
+      " terminal_z=" + std::to_string(landing_terminal_z_) +
+      " xy_error=" + std::to_string(xy_error) +
+      " vxy=" + std::to_string(vxy) +
+      " vz=" + std::to_string(vz) +
+      " yaw=" + std::to_string(euler_zyx(0)) +
+      " pitch=" + std::to_string(euler_zyx(1)) +
+      " roll=" + std::to_string(euler_zyx(2)) +
+      " pitch_abs=" + std::to_string(pitch_abs) +
+      " roll_abs=" + std::to_string(roll_abs) +
+      " body_rate=" + std::to_string(body_rate));
     reward = success ? landing_success_reward_ : landing_failure_reward_;
     return true;
   }
@@ -1060,6 +1101,10 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["invisible_stage_penalty"]) {
       invisible_stage_penalty_ = std::max(Scalar(0.0),
                                           cfg["rl"]["invisible_stage_penalty"].as<Scalar>());
+    }
+
+    if (cfg["rl"]["landing_tilt_hard"]) {
+      landing_tilt_hard_ = cfg["rl"]["landing_tilt_hard"].as<Scalar>();
     }
   
     if (cfg["rl"]["landing_terminal_z"]) {
