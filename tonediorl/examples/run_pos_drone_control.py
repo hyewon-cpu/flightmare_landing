@@ -103,7 +103,7 @@ def parser():
                         help="Log episode metrics to wandb every N episodes")
     parser.add_argument('--use_obs_norm', type=int, default=0, help="Use observation normalization (1=True, 0=False)")
     parser.add_argument('--include_prev_action', type=int, default=0,
-                        help="Append previous action to policy observation (1=True, 0=False)")
+                        help="Append the last N actions to policy observation (0 disables action history)")
     parser.add_argument('--include_area_obs', type=int, default=1,
                         help="Include area feature in PPO observation when available (1=True, 0=False)")
     parser.add_argument('--include_shape_obs', type=int, default=1,
@@ -147,20 +147,10 @@ def apply_init_pos_override(init_pos):
         #quad_cfg 를 YAML 텍스트로 변환해서 f 에 써줌. f는 quad_cfg_path 파일을 가리키는 파일 객체(quadrotor_env.yaml)
     print(f"[Config] Overrode quadrotor_env.init_pos -> {quad_cfg['quadrotor_env']['init_pos']}")
 
-def get_stage_switch_enabled():
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
-    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_pos_env.yaml")
-    yaml = YAML()
-    with open(quad_cfg_path, "r") as f:
-        quad_cfg = yaml.load(f)
-    return bool(quad_cfg.get("rl", {}).get("stage_switch_enabled", True))
-
-
 def build_env(
     cfg_yaml_str,
     use_obs_norm=True,
-    include_prev_action=True,
-    stage_switch_enabled=True,
+    include_prev_action=0,
     include_area_obs=True,
     include_shape_obs=True,
     include_tag_id_obs=False,
@@ -168,8 +158,7 @@ def build_env(
     env = wrapper.PosFlightEnvVec(   
         QuadrotorPosEnv_v1(cfg_yaml_str, False),
         use_obs_norm=use_obs_norm,
-        include_prev_action=bool(include_prev_action),
-        stage_switch_enabled=bool(stage_switch_enabled),
+        include_prev_action=int(include_prev_action),
         include_area_obs=bool(include_area_obs),
         include_shape_obs=bool(include_shape_obs),
         include_tag_id_obs=bool(include_tag_id_obs),
@@ -179,7 +168,8 @@ def build_env(
     return env
     #PosFlightEnvVec는 Stable Baselines3에서 사용할 수 있도록 Flightmare의 QuadrotorPosEnv_v1을 래핑한 클래스.
     #QuadrotorPosEnv_v1 는 Flightmare 시뮬레이터에서 제공하는 드론 제어 환경. pybind_wrapper.cpp 에서 C++로 구현된 환경을 Python에서 사용할 수 있도록 래핑한 클래스.
-    # cfg_yaml_str은 환경 설정을 담은 YAML 문자열. use_obs_norm과 include_prev_action은 관측값 정규화와 이전 행동 포함 여부를 설정하는 플래그.
+    #QuadrotorPosEnv_v1 의 인자들은 pybind 를 통해 C++ 인자로 바뀐다(그 인자들의 실행은 VEC_ENV.CPP 에서 cfg 로 매핑된다. cfg 는 vec_env.yaml의  configuration 들을 가지고 와서 환경 몇개를 만들지 결정한다.  
+    # cfg_yaml_str은 환경 설정을 담은 YAML 문자열. use_obs_norm과 include_prev_action은 관측값 정규화와 action history 길이를 설정한다.
 
 
 #raw image -> tag 정보와 이미지 정보 분리(_parse_tag_and_image) -> tag 정보에서 각 태그의 위치, ID, 가시성 등 추출 -> 이미지와 태그 정보를 시각화하는 함수들
@@ -334,6 +324,15 @@ def get_raw_obs_from_vec_env(vec_env):
         #raw = [[1,2,3,4...], [1,2,3,4,...], ...] 형태의 2차원 배열이어야 함.
         return None
     return raw[0] #첫번째 environment 의 raw observation 반환 
+
+
+def extract_extra_info_value(info, key, default=0.0):
+    if not isinstance(info, dict):
+        return float(default)
+    extra = info.get("extra_info", None)
+    if not isinstance(extra, dict):
+        return float(default)
+    return float(extra.get(key, default))
 
 
 class ProjectionVizCallback(BaseCallback):
@@ -569,21 +568,18 @@ def main():
 
     # main env
     use_obs_norm = bool(args.use_obs_norm)
-    include_prev_action = bool(args.include_prev_action)
+    include_prev_action = max(0, int(args.include_prev_action))
     include_area_obs = bool(args.include_area_obs)
     include_shape_obs = bool(args.include_shape_obs)
     include_tag_id_obs = bool(args.include_tag_id_obs)
-    stage_switch_enabled = get_stage_switch_enabled()
     print(
-        f"[Config] rl.stage_switch_enabled={stage_switch_enabled}, "
-        f"include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}, "
+        f"[Config] include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}, "
         f"include_tag_id_obs={include_tag_id_obs}"
     )
     env = build_env(
         cfg_yaml_str,
         use_obs_norm=use_obs_norm,
         include_prev_action=include_prev_action,
-        stage_switch_enabled=stage_switch_enabled,
         include_area_obs=include_area_obs,
         include_shape_obs=include_shape_obs,
         include_tag_id_obs=include_tag_id_obs,
@@ -631,7 +627,6 @@ def main():
             "include_area_obs": include_area_obs,
             "include_shape_obs": include_shape_obs,
             "include_tag_id_obs": include_tag_id_obs,
-            "stage_switch_enabled": stage_switch_enabled,
             "tag_center_coefficient" : cfg2["rl"].get("tag_center_coefficient", "not defined"),
             "tag_area_coeff" : cfg2["rl"].get("tag_area_coefficient", "not defined"),
             "tag_shape2_coeff" : cfg2["rl"].get("tag_shape2_coefficient", "not defined"),
@@ -725,7 +720,6 @@ def main():
                 stream_eval.getvalue(),
                 use_obs_norm=use_obs_norm,
                 include_prev_action=include_prev_action,
-                stage_switch_enabled=stage_switch_enabled,
                 include_area_obs=include_area_obs,
                 include_shape_obs=include_shape_obs,
                 include_tag_id_obs=include_tag_id_obs,
@@ -907,6 +901,19 @@ def main():
                 obs, reward, done, info = env.step(act)
                 total_reward += reward[0]
                 ep_len += 1
+                est_pc_x = extract_extra_info_value(info[0], "estimated_p_c_x") if len(info) > 0 else 0.0
+                est_pc_y = extract_extra_info_value(info[0], "estimated_p_c_y") if len(info) > 0 else 0.0
+                est_pc_z = extract_extra_info_value(info[0], "estimated_p_c_z") if len(info) > 0 else 0.0
+                real_pc_x = extract_extra_info_value(info[0], "real_p_c_x") if len(info) > 0 else 0.0
+                real_pc_y = extract_extra_info_value(info[0], "real_p_c_y") if len(info) > 0 else 0.0
+                real_pc_z = extract_extra_info_value(info[0], "real_p_c_z") if len(info) > 0 else 0.0
+                metric_area = extract_extra_info_value(info[0], "metric_area") if len(info) > 0 else 0.0
+                metric_shape2 = extract_extra_info_value(info[0], "metric_shape2") if len(info) > 0 else 0.0
+                print(
+                    f"           est_p_C=[{est_pc_x:.6f}, {est_pc_y:.6f}, {est_pc_z:.6f}] "
+                    f"| real_p_C=[{real_pc_x:.6f}, {real_pc_y:.6f}, {real_pc_z:.6f}] "
+                    f"| metric_area={metric_area:.6f} | metric_shape2={metric_shape2:.6f}"
+                )
 
                 # ---- logging (policy obs shape: [1, 8]) ----
                 pixels.append(obs[0, 0:2].tolist())

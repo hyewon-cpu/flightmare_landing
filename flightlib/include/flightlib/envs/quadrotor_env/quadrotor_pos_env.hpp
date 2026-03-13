@@ -91,6 +91,8 @@ class QuadrotorPosEnv final : public EnvBase {
                                   const QuadrotorPosEnv &quad_env);
 
  private:
+  bool worldPointToCamera(const Ref<const Vector<3>> p_W,
+                          Ref<Vector<3>> p_C) const;
   bool projectWorldPointToImage(const Ref<const Vector<3>> p_W,
                                 Ref<Vector<2>> pixel_uv,
                                 bool *in_front = nullptr,
@@ -118,6 +120,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar landing_w_xy_{1.0};
   Scalar landing_xy_reward_scale_{0.2};
   Scalar landing_w_z_{1.0};
+  Scalar landing_survival_reward_{0.0};
   Scalar landing_w_vel_xy_near_{0.5};
   Scalar landing_w_vel_xy_far_{0.2};
   Scalar landing_w_vel_z_near_{0.5};
@@ -180,7 +183,6 @@ class QuadrotorPosEnv final : public EnvBase {
   int stage_{0};
   bool area_reward_mode_active_{false};
   int miss_count_{0};
-  bool stage_switch_enabled_{true};
   bool hold_last_tag_obs_{false};
   int stage_miss_threshold_{4};
   bool stage_require_next_visible_{true};
@@ -206,6 +208,8 @@ class QuadrotorPosEnv final : public EnvBase {
   bool log_world_pose_{false};
   int log_world_pose_interval_steps_{50};
   int world_pose_log_counter_{0};
+  Vector<3> estimated_p_C_{Vector<3>::Zero()};
+  bool estimated_p_C_valid_{false};
 
   // tag-based image-space reward
   Scalar tag_vis_coeff_{1.0};
@@ -220,6 +224,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar last_r_xy_{0.0};
   Scalar last_r_vis_{0.0};
   Scalar last_r_center_{0.0};
+  Scalar last_r_survival_{0.0};
   Scalar last_metric_area_{0.0};
   Scalar last_metric_shape2_{0.0};
   Scalar last_r_area_{0.0};

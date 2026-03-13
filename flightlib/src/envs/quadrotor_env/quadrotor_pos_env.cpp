@@ -64,6 +64,55 @@ bool parseWorldBox(const YAML::Node &world_box_node, Matrix<3, 2> *world_box) {
   return false;
 }
 
+Scalar polygonArea(const std::array<Vector<2>, 4> &pts) {
+  Scalar twice_area = 0.0;
+  for (int i = 0; i < 4; i++) {
+    const Vector<2> &a = pts[i];
+    const Vector<2> &b = pts[(i + 1) % 4];
+    twice_area += a.x() * b.y() - b.x() * a.y();
+  }
+  return std::abs(twice_area) * Scalar(0.5);
+}
+
+Scalar axisAlignmentPenalty(const std::array<Vector<2>, 4> &pts) {
+  constexpr Scalar eps = static_cast<Scalar>(1e-6);
+  const Vector<2> v01 = pts[1] - pts[0];
+  const Vector<2> v12 = pts[2] - pts[1];
+  const Vector<2> v23 = pts[3] - pts[2];
+  const Vector<2> v30 = pts[0] - pts[3];
+  const Scalar l01 = v01.norm();
+  const Scalar l12 = v12.norm();
+  const Scalar l23 = v23.norm();
+  const Scalar l30 = v30.norm();
+  const Vector<2> u01 = v01 / (l01 + eps);
+  const Vector<2> u12 = v12 / (l12 + eps);
+  const Vector<2> u23 = v23 / (l23 + eps);
+  const Vector<2> u30 = v30 / (l30 + eps);
+  const Scalar a01 = std::abs(u01.y());
+  const Scalar a12 = std::abs(u12.x());
+  const Scalar a23 = std::abs(u23.y());
+  const Scalar a30 = std::abs(u30.x());
+  return (a01 + a12 + a23 + a30) * Scalar(0.25);
+}
+
+bool tagObsCornersFromQuadObs(const Vector<quadposenv::kNObs> &quad_obs,
+                              int tag_idx,
+                              std::array<Vector<2>, 4> *corners) {
+  const int obs_base = quadposenv::kObs + tag_idx * quadposenv::kTagFeat;
+  if (quad_obs(obs_base + quadposenv::kTagId) < 0.0) {
+    return false;
+  }
+  (*corners)[0] << quad_obs(obs_base + quadposenv::kCorner0X),
+    quad_obs(obs_base + quadposenv::kCorner0Y);
+  (*corners)[1] << quad_obs(obs_base + quadposenv::kCorner1X),
+    quad_obs(obs_base + quadposenv::kCorner1Y);
+  (*corners)[2] << quad_obs(obs_base + quadposenv::kCorner2X),
+    quad_obs(obs_base + quadposenv::kCorner2Y);
+  (*corners)[3] << quad_obs(obs_base + quadposenv::kCorner3X),
+    quad_obs(obs_base + quadposenv::kCorner3Y);
+  return true;
+}
+
 Scalar estimateTagScale(const Matrix<3, 4> &corners) {
   const Scalar l01 = (corners.col(1) - corners.col(0)).norm();
   const Scalar l12 = (corners.col(2) - corners.col(1)).norm();
@@ -237,7 +286,7 @@ QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
   use_ctbr_ = (control_mode == "ctbr");
 
   if (use_ctbr_) {
-    const Scalar hover_acc = -Gz;
+    const Scalar hover_acc = -Gz; //types.hpp 에서 -9.81 로 정의되어 있음 
     Vector<3> omega_max = Vector<3>::Constant(6.0);
     if (cfg_["quadrotor_dynamics"] && cfg_["quadrotor_dynamics"]["omega_max"]) {
       const std::vector<Scalar> omega_max_cfg =
@@ -246,6 +295,7 @@ QuadrotorPosEnv::QuadrotorPosEnv(const std::string &cfg_path)
         omega_max = Map<const Vector<3>>(omega_max_cfg.data());
       }
     }
+    //CTBR 일때 
     act_mean_ << hover_acc, 0.0, 0.0, 0.0;
     act_std_ << hover_acc, omega_max.x(), omega_max.y(), omega_max.z();
   } else {
@@ -272,6 +322,11 @@ bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
   prev_corner_uv_.setZero();
   prev_corner_uv_valid_ = false;
   curr_tag_visible_.fill(false);
+  estimated_p_C_.setZero();
+  estimated_p_C_valid_ = false;
+  last_observed_area_ = -1.0;
+  last_tag_visible_ = false;
+  last_corners_visible_ = false;
   stage_ = 0;
   area_reward_mode_active_ = false;
   miss_count_ = 0;
@@ -350,19 +405,24 @@ bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
   return true;
 }
 
+bool QuadrotorPosEnv::worldPointToCamera(const Ref<const Vector<3>> p_W,
+                                         Ref<Vector<3>> p_C) const {
+  const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+  const Vector<3> p_WB = quad_state_.p;
+  const Matrix<3, 3> R_WC = R_WB * R_BC_;
+  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_;
+  p_C = R_WC.transpose() * (p_W - p_WC);
+  return p_C.allFinite();
+}
+
 bool QuadrotorPosEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
                                                Ref<Vector<2>> pixel_uv,
                                                bool *in_front,
                                                bool *in_image) const {
-  // R_WB rotates body-frame vectors into world frame.
-  const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix(); //drone orientation
-  const Vector<3> p_WB = quad_state_.p; //drone position
-
-  const Matrix<3, 3> R_WC = R_WB * R_BC_; //camera world orientation
-  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_; //camera world POSITION
-
-  // Transform world point into camera coordinates.
-  const Vector<3> p_C = R_WC.transpose() * (p_W - p_WC); //p_W = target world coordinates
+  Vector<3> p_C;
+  if (!worldPointToCamera(p_W, p_C)) {
+    return false;
+  }
 
   constexpr Scalar kMinDepth = 1e-2;
   const Scalar depth = p_C.y();
@@ -452,6 +512,9 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
     quad_obs_(obs_x_idx + 1) = py * sy;
   };
 
+  last_tag_visible_ = false;
+  last_corners_visible_ = false;
+
   for (int tag_idx = 0; tag_idx < quadposenv::kNumTags; tag_idx++) {
     const int obs_base = quadposenv::kObs + tag_idx * quadposenv::kTagFeat;
     bool center_in_image = false;
@@ -482,7 +545,33 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
       set_obs_from_center_uv(corner_uv[2], obs_base + quadposenv::kCorner2X);
       set_obs_from_center_uv(corner_uv[3], obs_base + quadposenv::kCorner3X);
       quad_obs_(obs_base + quadposenv::kTagId) = static_cast<Scalar>(tag_idx);
+
+      if (tag_idx == 0) {
+        Vector<3> measured_p_C;
+        if (worldPointToCamera(tag_center_world_[0], measured_p_C)) {
+          estimated_p_C_ = measured_p_C;
+          estimated_p_C_valid_ = true;
+        }
+        last_tag_visible_ = true;
+        last_corners_visible_ = true;
+      }
     }
+  }
+
+  if (!curr_tag_visible_[0] && estimated_p_C_valid_) {
+    const Vector<3> omega_cmd = quad_act_.segment<3>(1);
+    estimated_p_C_ -= sim_dt_ * omega_cmd.cross(estimated_p_C_);
+  }
+
+  std::array<Vector<2>, 4> tag0_corners;
+  if (tagObsCornersFromQuadObs(quad_obs_, 0, &tag0_corners)) {
+    last_metric_area_ = polygonArea(tag0_corners);
+    last_metric_shape2_ = -axisAlignmentPenalty(tag0_corners);
+    last_observed_area_ = last_metric_area_;
+  } else {
+    last_metric_area_ = 0.0;
+    last_metric_shape2_ = 0.0;
+    last_observed_area_ = -1.0;
   }
 
   cv::Mat rgb_image;
@@ -524,12 +613,23 @@ void QuadrotorPosEnv::updateExtraInfo() {
   extra_info_["reward_total"] = last_total_reward_;
   extra_info_["reward_xy"] = last_r_xy_;
   extra_info_["reward_z"] = last_r_center_;
+  extra_info_["reward_survival"] = last_r_survival_;
   extra_info_["reward_action_hover"] = last_r_vis_;
+  extra_info_["metric_area"] = last_metric_area_;
+  extra_info_["metric_shape2"] = last_metric_shape2_;
+  extra_info_["estimated_p_c_x"] = estimated_p_C_valid_ ? estimated_p_C_.x() : 0.0f;
+  extra_info_["estimated_p_c_y"] = estimated_p_C_valid_ ? estimated_p_C_.y() : 0.0f;
+  extra_info_["estimated_p_c_z"] = estimated_p_C_valid_ ? estimated_p_C_.z() : 0.0f;
+  Vector<3> real_p_C;
+  const bool real_p_C_valid = worldPointToCamera(tag_center_world_[0], real_p_C);
+  extra_info_["real_p_c_x"] = real_p_C_valid ? real_p_C.x() : 0.0f;
+  extra_info_["real_p_c_y"] = real_p_C_valid ? real_p_C.y() : 0.0f;
+  extra_info_["real_p_c_z"] = real_p_C_valid ? real_p_C.z() : 0.0f;
 }
 
 Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   quad_act_ = act.cwiseProduct(act_std_) + act_mean_;
-  cmd_.t += sim_dt_;
+  cmd_.t += sim_dt_; //sim_dt_ : 한  step 마다 시간이 sim_dt 만큼 증가 
   if (use_ctbr_) {
     cmd_.collective_thrust = quad_act_(0);
     cmd_.omega = quad_act_.segment<3>(1);
@@ -554,20 +654,20 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   const Scalar reward_xy =
     landing_w_xy_ / (Scalar(1.0) + landing_xy_reward_scale_ * xy_error);
   const Scalar reward_z = -landing_w_z_ * (z_error * z_error);
+  const Scalar reward_survival = landing_survival_reward_;
   const Scalar action_hover_error =
-    (quad_act_(0) - Scalar(9.81)) * (quad_act_(0) - Scalar(9.81)) +
+    (quad_act_(0) - Scalar(0)) * (quad_act_(0) - Scalar(0)) +
     quad_act_(1) * quad_act_(1) +
     quad_act_(2) * quad_act_(2) +
     quad_act_(3) * quad_act_(3);
   const Scalar reward_action_hover = -landing_w_action_hover_ * action_hover_error;
-  const Scalar total_reward = reward_xy + reward_z + reward_action_hover;
+  const Scalar total_reward = reward_xy + reward_z + reward_survival + reward_action_hover;
 
   last_total_reward_ = total_reward;
   last_r_xy_ = reward_xy;
   last_r_vis_ = reward_action_hover;
   last_r_center_ = reward_z;
-  last_metric_area_ = 0.0;
-  last_metric_shape2_ = 0.0;
+  last_r_survival_ = reward_survival;
   last_r_area_ = 0.0;
   last_r_shape_ = 0.0;
   last_r_shape2_ = 0.0;
@@ -575,9 +675,6 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   last_r_smooth_ = 0.0;
   last_r_invisible_ = 0.0;
   last_r_switch_ = 0.0;
-  last_observed_area_ = -1.0;
-  last_tag_visible_ = false;
-  last_corners_visible_ = false;
 
   const Matrix<3, 3> R_WB_log = quad_state_.q().toRotationMatrix();
   const Vector<3> euler_zyx_log = R_WB_log.eulerAngles(2, 1, 0);
@@ -816,6 +913,9 @@ bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
     }
     if (cfg["rl"]["landing_w_z"]) {
       landing_w_z_ = cfg["rl"]["landing_w_z"].as<Scalar>();
+    }
+    if (cfg["rl"]["landing_survival_reward"]) {
+      landing_survival_reward_ = cfg["rl"]["landing_survival_reward"].as<Scalar>();
     }
     if (cfg["rl"]["landing_w_action_hover"]) {
       landing_w_action_hover_ = cfg["rl"]["landing_w_action_hover"].as<Scalar>();

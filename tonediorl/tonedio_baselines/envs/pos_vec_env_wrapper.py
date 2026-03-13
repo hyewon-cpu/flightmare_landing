@@ -31,8 +31,7 @@ class PosFlightEnvVec(VecEnv):
         self,
         impl,
         use_obs_norm: bool = True,
-        include_prev_action: bool = False,
-        stage_switch_enabled: bool = True,
+        include_prev_action: int = 0,
         include_area_obs: bool = True,
         include_shape_obs: bool = True,
         include_tag_id_obs: bool = False,
@@ -44,8 +43,7 @@ class PosFlightEnvVec(VecEnv):
         """
         self.wrapper = impl
         self.use_obs_norm = use_obs_norm
-        self.include_prev_action = bool(include_prev_action)
-        self.stage_switch_enabled = bool(stage_switch_enabled)
+        self.prev_action_history_len = max(0, int(include_prev_action))
         self.include_area_obs = bool(include_area_obs)
         self.include_shape_obs = bool(include_shape_obs)
         self.include_tag_id_obs = bool(include_tag_id_obs)
@@ -56,13 +54,18 @@ class PosFlightEnvVec(VecEnv):
         self._extraInfoNames = list(self.wrapper.getExtraInfoNames())
         self._extraInfoNameToIdx = {name: i for i, name in enumerate(self._extraInfoNames)}
         self._reward_obs_indices = []
+        self._pc_obs_indices = []
         area_key = "metric_area" if "metric_area" in self._extraInfoNameToIdx else "reward_area"
         shape_key = "metric_shape2" if "metric_shape2" in self._extraInfoNameToIdx else "reward_shape2"
+        for key in ("real_p_c_x", "real_p_c_y", "real_p_c_z"):
+            if key in self._extraInfoNameToIdx:
+                self._pc_obs_indices.append(self._extraInfoNameToIdx[key])
         if self.include_area_obs and area_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[area_key])
         if self.include_shape_obs and shape_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[shape_key])
         self._reward_obs_dim = len(self._reward_obs_indices)
+        self._pc_obs_dim = len(self._pc_obs_indices)
         self._image_dim = self.IMG_HEIGHT * self.IMG_WIDTH * self.IMG_CHANNELS
         self._tag_uv_dim = max(0, self.num_obs - self._image_dim)
         self._is_image_obs = self.num_obs == (
@@ -75,9 +78,8 @@ class PosFlightEnvVec(VecEnv):
         )
         if self._is_tag_image_obs:
             self._num_tags = self._tag_uv_dim // self.TAG_UV_DIM
-            # stage_switch_enabled=True  -> use all tag features
-            # stage_switch_enabled=False -> use first tag features only
-            self._policy_num_tags = self._num_tags if self.stage_switch_enabled else 1
+            # Policy uses only the first QR tag block.
+            self._policy_num_tags = 1
             self._policy_tag_feat_dim = self.TAG_UV_DIM if self.include_tag_id_obs else self.TAG_POLICY_FEAT_DIM
             self._policy_tag_uv_dim = self._policy_num_tags * self._policy_tag_feat_dim
         else:
@@ -85,7 +87,8 @@ class PosFlightEnvVec(VecEnv):
             self._policy_num_tags = 0
             self._policy_tag_feat_dim = self._tag_uv_dim
             self._policy_tag_uv_dim = self._tag_uv_dim
-        self._append_prev_action = self.include_prev_action and (not self._is_image_obs)
+        self._append_prev_action = self.prev_action_history_len > 0 and (not self._is_image_obs)
+        self._prev_action_obs_dim = self.prev_action_history_len * self.num_acts if self._append_prev_action else 0
 
         if self._is_image_obs and use_obs_norm:
             print("[FlightEnvVecSB3] image observation detected, disabling observation normalization.")
@@ -100,15 +103,14 @@ class PosFlightEnvVec(VecEnv):
                 dtype=np.uint8,
             )
         elif self._is_tag_image_obs:
-            # Policy sees all tag UV features when stage switching is enabled.
-            policy_dim = self._policy_tag_uv_dim + self._reward_obs_dim + (self.num_acts if self._append_prev_action else 0)
+            policy_dim = self._policy_tag_uv_dim + self._reward_obs_dim + self._pc_obs_dim + self._prev_action_obs_dim
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         else:
-            policy_dim = self.num_obs + (self.num_acts if self._append_prev_action else 0)
+            policy_dim = self.num_obs + self._prev_action_obs_dim
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
@@ -128,7 +130,9 @@ class PosFlightEnvVec(VecEnv):
         self._observation = np.zeros((self._num_envs, self.num_obs), dtype=np.float32)
         self._reward = np.zeros((self._num_envs,), dtype=np.float32)
         self._done = np.zeros((self._num_envs,), dtype=bool)
-        self._prev_actions = np.zeros((self._num_envs, self.num_acts), dtype=np.float32)
+        self._prev_actions = np.zeros(
+            (self._num_envs, self.prev_action_history_len, self.num_acts), dtype=np.float32
+        )
 
         self._extraInfo = np.zeros((self._num_envs, len(self._extraInfoNames)), dtype=np.float32)
 
@@ -156,12 +160,12 @@ class PosFlightEnvVec(VecEnv):
             f"tag_uv_dim={self._tag_uv_dim if self._is_tag_image_obs else 0}, "
             f"policy_tag_uv_dim={self._policy_tag_uv_dim if self._is_tag_image_obs else 0}, "
             f"reward_obs_dim={self._reward_obs_dim if self._is_tag_image_obs else 0}, "
+            f"pc_obs_dim={self._pc_obs_dim if self._is_tag_image_obs else 0}, "
             f"include_area_obs={self.include_area_obs}, "
             f"include_shape_obs={self.include_shape_obs}, "
             f"include_tag_id_obs={self.include_tag_id_obs}, "
-            f"stage_switch_enabled={self.stage_switch_enabled}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
-            f"include_prev_action={self._append_prev_action}"
+            f"prev_action_history_len={self.prev_action_history_len}"
         )
 
     def seed(self, seed=0):
@@ -308,9 +312,10 @@ class PosFlightEnvVec(VecEnv):
         else:
             infos = [{} for _ in range(self._num_envs)]
 
-        # Returned observation can include previous action (action from the just-finished step).
+        # Returned observation can include a configurable history of previous actions.
         if self._append_prev_action:
-            self._prev_actions = self._actions.copy().astype(np.float32)
+            self._prev_actions[:, 1:, :] = self._prev_actions[:, :-1, :]
+            self._prev_actions[:, 0, :] = self._actions.astype(np.float32)
             if np.any(self._done):
                 self._prev_actions[self._done] = 0.0
 
@@ -430,13 +435,21 @@ class PosFlightEnvVec(VecEnv):
             if self._reward_obs_dim > 0:
                 reward_obs = self._extraInfo[:, self._reward_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, reward_obs], axis=1).astype(np.float32)
+            if self._pc_obs_dim > 0:
+                pc_obs = self._extraInfo[:, self._pc_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, pc_obs], axis=1).astype(np.float32)
             if self._append_prev_action:
-                policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
             return policy_obs
         policy_obs = obs.astype(np.float32)
         if self._append_prev_action:
-            policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+            policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
         return policy_obs
+
+    def _flatten_prev_actions(self) -> np.ndarray:
+        if not self._append_prev_action:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        return self._prev_actions.reshape(self._num_envs, self._prev_action_obs_dim).astype(np.float32)
 
     def _policy_base_obs(self, obs: np.ndarray) -> np.ndarray:
         """

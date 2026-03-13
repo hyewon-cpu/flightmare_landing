@@ -2,10 +2,10 @@ quadrotor_env:
   sim_dt: 0.02
   max_t: 10.0
   control_mode: ctbr   # motor | ctbr
-  world_box: [[-10, 20.0], [-10.0, 20.0], [0.0, 50.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
-  init_pos: [0, 0, 40.0]                   # base reset position [x,y,z]
-  randomize_position_on_reset: false
-  randomize_position_scale: 5.0   # scale for position noise around init_pos
+  world_box: [[-100, 100.0], [-100.0, 100.0], [0.0, 100.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
+  init_pos: [5.5, 6.5, 60.0]                   # base reset position [x,y,z]
+  randomize_position_on_reset: true
+  randomize_position_scale: 20.0   # scale for position noise around init_pos
   randomize_velocity_on_reset: false
   randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
   randomize_attitude_on_reset: false   # false -> start level (identity quaternion)
@@ -81,13 +81,14 @@ rl:
 
 
   ########### 로그 ##############
-  log_interval_steps: 1 # ___ step 마다 로그 출력
+  log_interval_steps: 100000000 # ___ step 마다 로그 출력
 
   ####### reward ###########################################################################
   landing_w_xy: 100 #xy position difference penalty weight
   landing_xy_reward_scale: 0.2 #scale factor in reward_xy = w_xy / (1 + scale * xy_error)
   landing_w_z: 0.5 #z position difference penalty weight
-  landing_w_action_hover: 0.5 #penalty weight for deviation from [9.81, 0, 0, 0] action
+  landing_survival_reward: 0.5 # constant reward added every alive step
+  landing_w_action_hover: 0.0 #penalty weight for deviation from [9.81, 0, 0, 0] action
 
   ###############설정값#############################################################
   hold_last_tag_obs: true # whether to hold the last observed tag pose when the tag is not observed (e.g., during landing when the tag is on the ground and not visible)
