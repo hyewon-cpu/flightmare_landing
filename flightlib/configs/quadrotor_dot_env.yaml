@@ -2,9 +2,9 @@ quadrotor_env:
   sim_dt: 0.02
   max_t: 10.0
   control_mode: ctbr   # motor | ctbr
-  world_box: [[-20, 20.0], [-20.0, 20.0], [0.0, 50.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
+  world_box: [[-20, 20.0], [-20.0, 20.0], [0.0, 100.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
   init_pos: [5.5, 6.5, 40.0]                   # base reset position [x,y,z]
-  randomize_position_on_reset: false
+  randomize_position_on_reset: true
   randomize_position_scale: 5.0   # scale for position noise around init_pos
   randomize_velocity_on_reset: false
   randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
@@ -80,7 +80,7 @@ rl:
 
 
   ########### 로그 ##############
-  log_interval_steps: 1000 # ___ step 마다 로그 출력
+  log_interval_steps: 1 # ___ step 마다 로그 출력
 
   ####### tag-based image-space reward##############################################################
   #사용하는 계수들 
@@ -92,7 +92,7 @@ rl:
 
 
   #사용하는 설정값들 
-  stage_switch_enabled: false  # false -> always use stage 0 (tag 0 only)
+  stage_switch_enabled: false   # false -> always use stage 0 (tag 0 only)
   hold_last_tag_obs: false  # true -> if QR is not visible, keep previous tag obs; false -> fill tag obs with -1
   stage_target_area: [1000.0, 200.0, 100.0]  # target projected area for [largest, middle, smallest] + invisible threshold 기준
   invisible_base_penalty: 10.0  # base penalty when previous visible area is above stage threshold and QR is not fully visible

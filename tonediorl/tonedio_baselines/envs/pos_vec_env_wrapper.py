@@ -35,6 +35,7 @@ class PosFlightEnvVec(VecEnv):
         include_area_obs: bool = True,
         include_shape_obs: bool = True,
         include_tag_id_obs: bool = False,
+        include_real_p_c_obs: bool = True,
     ):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
@@ -47,6 +48,7 @@ class PosFlightEnvVec(VecEnv):
         self.include_area_obs = bool(include_area_obs)
         self.include_shape_obs = bool(include_shape_obs)
         self.include_tag_id_obs = bool(include_tag_id_obs)
+        self.include_real_p_c_obs = bool(include_real_p_c_obs)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -57,9 +59,10 @@ class PosFlightEnvVec(VecEnv):
         self._pc_obs_indices = []
         area_key = "metric_area" if "metric_area" in self._extraInfoNameToIdx else "reward_area"
         shape_key = "metric_shape2" if "metric_shape2" in self._extraInfoNameToIdx else "reward_shape2"
-        for key in ("real_p_c_x", "real_p_c_y", "real_p_c_z"):
-            if key in self._extraInfoNameToIdx:
-                self._pc_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_real_p_c_obs:
+            for key in ("real_p_c_x", "real_p_c_y", "real_p_c_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._pc_obs_indices.append(self._extraInfoNameToIdx[key])
         if self.include_area_obs and area_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[area_key])
         if self.include_shape_obs and shape_key in self._extraInfoNameToIdx:
@@ -164,6 +167,7 @@ class PosFlightEnvVec(VecEnv):
             f"include_area_obs={self.include_area_obs}, "
             f"include_shape_obs={self.include_shape_obs}, "
             f"include_tag_id_obs={self.include_tag_id_obs}, "
+            f"include_real_p_c_obs={self.include_real_p_c_obs}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
             f"prev_action_history_len={self.prev_action_history_len}"
         )
@@ -428,14 +432,14 @@ class PosFlightEnvVec(VecEnv):
             ).astype(np.uint8)
         if self._is_tag_image_obs:
             # `obs` may be raw C++ observation or already-extracted policy features.
-            if obs.ndim == 2 and obs.shape[1] == self._policy_tag_uv_dim:
+            if obs.ndim == 2 and obs.shape[1] == self._policy_tag_uv_dim: #policy_tag_uv_dim = policy 에 실제로 들어가는 태그 관측수 
                 policy_obs = obs.astype(np.float32)
             else:
-                policy_obs = self._extract_policy_tag_obs(obs)
-            if self._reward_obs_dim > 0:
+                policy_obs = self._extract_policy_tag_obs(obs) #태그 부분만 분리 
+            if self._reward_obs_dim > 0: #reward_obs_dim : 태그 말고 더 붙일 obs 개수 
                 reward_obs = self._extraInfo[:, self._reward_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, reward_obs], axis=1).astype(np.float32)
-            if self._pc_obs_dim > 0:
+            if self._pc_obs_dim > 0: #p_C 붙일거면 
                 pc_obs = self._extraInfo[:, self._pc_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, pc_obs], axis=1).astype(np.float32)
             if self._append_prev_action:

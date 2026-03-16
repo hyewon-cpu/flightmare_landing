@@ -1,11 +1,11 @@
 quadrotor_env:
   sim_dt: 0.02
-  max_t: 10.0
+  max_t: 100.0
   control_mode: ctbr   # motor | ctbr
   world_box: [[-100, 100.0], [-100.0, 100.0], [0.0, 100.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
   init_pos: [5.5, 6.5, 60.0]                   # base reset position [x,y,z]
   randomize_position_on_reset: true
-  randomize_position_scale: 20.0   # scale for position noise around init_pos
+  randomize_position_scale: 10.0   # scale for position noise around init_pos
   randomize_velocity_on_reset: false
   randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
   randomize_attitude_on_reset: false   # false -> start level (identity quaternion)
@@ -69,26 +69,36 @@ rl:
   landing_tilt_hard: 10 #terminate when tilt exceeds this [radian]
 
 
-  ######Success 조건######################################################################
-  landing_success_xy_error: 0.5  #xy error needs to be smaller than this to succeed
-  landing_success_vz: 0.25  #z error needs to be smaller than this to succeed
-  landing_success_tilt: 0.3 #tilt(pitch and roll) needs to be smaller than this to succeed
-  landing_success_vxy: 0.3  #xy speed needs to be smaller than this to succeed
-  landing_success_body_rate: 0.3 #body-rate norm needs to be smaller than this to succeed
-  landing_success_reward: 100.0
-  landing_failure_reward: -10.0
+  ######Terminal reward######################################################################
+  landing_failure_reward: -100.0
   landing_tilt_hard_penalty: -20.0 # penalty when exceeding landing tilt
 
 
   ########### 로그 ##############
-  log_interval_steps: 100000000 # ___ step 마다 로그 출력
+  log_interval_steps: 1 # ___ step 마다 로그 출력
 
   ####### reward ###########################################################################
-  landing_w_xy: 100 #xy position difference penalty weight
-  landing_xy_reward_scale: 0.2 #scale factor in reward_xy = w_xy / (1 + scale * xy_error)
-  landing_w_z: 0.5 #z position difference penalty weight
-  landing_survival_reward: 0.5 # constant reward added every alive step
-  landing_w_action_hover: 0.0 #penalty weight for deviation from [9.81, 0, 0, 0] action
+  centering_w_xy: 0 # xy centering reward weight toward the target tag
+  centering_xy_reward_scale: 0.2 # scale factor in reward_xy = w_xy / (1 + scale * xy_error)
+  centering_w_z: 0.00 # z-axis tracking penalty weight while centering
+  centering_w_tilt: 0.0 # tilt penalty weight; larger tilt gets penalized more strongly
+  centering_survival_reward: 0.5 # constant reward added every alive step during centering
+  centering_w_action_hover: 0.0 # penalty weight for deviation from the centering hover action [0, 0, 0, 0]
+
+  tag_center_coeff: 0.0 # positive reward from image-plane tag center proximity to the screen center
+  tag_center_progress_coeff: 100.0 # positive reward when image-plane center error decreases compared to the previous step
+  tag_area_coeff: 0.0 # reward when observed tag area is close to tag_target_area
+  tag_shape_coeff: 100.0 # reward when tag edges are aligned with the image x/y axes
+  tag_target_area: 300.0 # desired tag area in image pixels^2
+  tag_area_error_scale: 3.0 # larger -> area reward peaks more sharply around tag_target_area
+  tag_shape_error_scale: 8.0 # larger -> shape reward drops much faster when edges are not parallel to image x/y axes
+  tag_missing_penalty: 100.0 # penalty applied when tag center/corners are unavailable in the observation
 
   ###############설정값#############################################################
-  hold_last_tag_obs: true # whether to hold the last observed tag pose when the tag is not observed (e.g., during landing when the tag is on the ground and not visible)
+  hold_last_tag_obs: false # whether to hold the last observed tag pose when the tag is not observed (e.g., during landing when the tag is on the ground and not visible)
+  include_prev_action: 4 # append the last N actions to PPO observation (0 disables action history)
+  include_area_obs: false # append the tag area metric to PPO observation in the Python wrapper
+  include_shape_obs: false # append the tag shape metric to PPO observation in the Python wrapper
+  include_tag_id_obs: false # include tag_id in the tag block passed to PPO
+  include_real_p_c_obs: false # append world-derived real p_C=[x,y,z] to PPO observation in the Python wrapper
+  use_projected_uv_out_of_view: true # if true, use projected uv values even when the tag is outside the image, as long as the projection is valid

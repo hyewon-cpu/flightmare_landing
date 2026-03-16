@@ -88,7 +88,7 @@ def parser():
     # eval freq, model_save_freq 모두 timestep 기준
     parser.add_argument('--total_timesteps', type=int, default=25_000_000,
                    help="Total training timesteps")
-    parser.add_argument('--eval_freq', type=int, default=10_000,
+    parser.add_argument('--eval_freq', type=int, default=1000,
                    help="Eval frequency (timesteps per env)")
     parser.add_argument('--n_eval_episodes', type=int, default=5,
                    help="Number of eval episodes")
@@ -96,20 +96,12 @@ def parser():
                    help="Checkpoint save frequency in total timesteps. Default is 50,000.")
 
     # wandb
-    parser.add_argument('--wandb', type=int, default=0, help="Enable wandb logging")
-    parser.add_argument('--wandb_project', type=str, default='flightmare_landing', help="wandb project name")
+    parser.add_argument('--wandb', type=int, default=1, help="Enable wandb logging")
+    parser.add_argument('--wandb_project', type=str, default='flightmare_centering', help="wandb project name")
     parser.add_argument('--wandb_run_name', type=str, default=None, help="wandb run name")
     parser.add_argument('--wandb_episode_log_freq', type=int, default=10,
                         help="Log episode metrics to wandb every N episodes")
     parser.add_argument('--use_obs_norm', type=int, default=0, help="Use observation normalization (1=True, 0=False)")
-    parser.add_argument('--include_prev_action', type=int, default=0,
-                        help="Append the last N actions to policy observation (0 disables action history)")
-    parser.add_argument('--include_area_obs', type=int, default=1,
-                        help="Include area feature in PPO observation when available (1=True, 0=False)")
-    parser.add_argument('--include_shape_obs', type=int, default=1,
-                        help="Include shape feature in PPO observation when available (1=True, 0=False)")
-    parser.add_argument('--include_tag_id_obs', type=int, default=0,
-                        help="Include tag_id in PPO observation for each tag block (1=True: 11 dims, 0=False: 10 dims)")
     parser.add_argument('--rms_path', type=str, default=None, 
                         help="Path to normalization statistics (.npz file) for testing. "
                              "If None, will try to find RMS file from checkpoint directory.")
@@ -147,6 +139,31 @@ def apply_init_pos_override(init_pos):
         #quad_cfg 를 YAML 텍스트로 변환해서 f 에 써줌. f는 quad_cfg_path 파일을 가리키는 파일 객체(quadrotor_env.yaml)
     print(f"[Config] Overrode quadrotor_env.init_pos -> {quad_cfg['quadrotor_env']['init_pos']}")
 
+
+def get_include_real_p_c_obs():
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_pos_env.yaml")
+    yaml = YAML()
+    with open(quad_cfg_path, "r") as f:
+        quad_cfg = yaml.load(f)
+    return bool(quad_cfg.get("rl", {}).get("include_real_p_c_obs", True))
+
+
+def get_obs_wrapper_config():
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_pos_env.yaml")
+    yaml = YAML()
+    with open(quad_cfg_path, "r") as f:
+        quad_cfg = yaml.load(f)
+    rl_cfg = quad_cfg.get("rl", {})
+    return {
+        "include_prev_action": max(0, int(rl_cfg.get("include_prev_action", 0))),
+        "include_area_obs": bool(rl_cfg.get("include_area_obs", True)),
+        "include_shape_obs": bool(rl_cfg.get("include_shape_obs", True)),
+        "include_tag_id_obs": bool(rl_cfg.get("include_tag_id_obs", False)),
+        "include_real_p_c_obs": bool(rl_cfg.get("include_real_p_c_obs", True)),
+    }
+
 def build_env(
     cfg_yaml_str,
     use_obs_norm=True,
@@ -154,6 +171,7 @@ def build_env(
     include_area_obs=True,
     include_shape_obs=True,
     include_tag_id_obs=False,
+    include_real_p_c_obs=True,
 ):
     env = wrapper.PosFlightEnvVec(   
         QuadrotorPosEnv_v1(cfg_yaml_str, False),
@@ -162,6 +180,7 @@ def build_env(
         include_area_obs=bool(include_area_obs),
         include_shape_obs=bool(include_shape_obs),
         include_tag_id_obs=bool(include_tag_id_obs),
+        include_real_p_c_obs=bool(include_real_p_c_obs),
     )
     env = VecMonitor(env)  # SB3 전용 래퍼. 에피소드 통계를 자동 기록. episode 끝날때  info 에 길이/리턴 같은 통계를 넣음. 이걸 Tensorboard 에서 집계함 
     # VecMonitor는 episode가 끝날 때마다 정보 업데이트. 
@@ -568,13 +587,16 @@ def main():
 
     # main env
     use_obs_norm = bool(args.use_obs_norm)
-    include_prev_action = max(0, int(args.include_prev_action))
-    include_area_obs = bool(args.include_area_obs)
-    include_shape_obs = bool(args.include_shape_obs)
-    include_tag_id_obs = bool(args.include_tag_id_obs)
+    obs_wrapper_cfg = get_obs_wrapper_config()
+    include_prev_action = obs_wrapper_cfg["include_prev_action"]
+    include_area_obs = obs_wrapper_cfg["include_area_obs"]
+    include_shape_obs = obs_wrapper_cfg["include_shape_obs"]
+    include_tag_id_obs = obs_wrapper_cfg["include_tag_id_obs"]
+    include_real_p_c_obs = obs_wrapper_cfg["include_real_p_c_obs"]
     print(
-        f"[Config] include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}, "
-        f"include_tag_id_obs={include_tag_id_obs}"
+        f"[Config] include_prev_action={include_prev_action}, include_area_obs={include_area_obs}, "
+        f"include_shape_obs={include_shape_obs}, include_tag_id_obs={include_tag_id_obs}, "
+        f"include_real_p_c_obs={include_real_p_c_obs}"
     )
     env = build_env(
         cfg_yaml_str,
@@ -583,6 +605,7 @@ def main():
         include_area_obs=include_area_obs,
         include_shape_obs=include_shape_obs,
         include_tag_id_obs=include_tag_id_obs,
+        include_real_p_c_obs=include_real_p_c_obs,
     )
     unity_connected = False
     if need_unity_camera:
@@ -601,12 +624,12 @@ def main():
     if obs_preview.ndim >= 2 and obs_preview.shape[0] > 0:
         print(f"[PolicyObs] env0={obs_preview[0].tolist()}")
 
-    #
+    
     if args.train:
         # save the configuration and other files
         rsg_root = os.path.dirname(os.path.abspath(__file__))
         log_dir = rsg_root + '/saved'
-        saver = U.ConfigurationSaver(log_dir=log_dir)
+        saver = U.ConfigurationSaver(log_dir=log_dir, run_name=args.wandb_run_name)
 
         n_envs = env.num_envs
         n_steps = 250
@@ -627,14 +650,15 @@ def main():
             "include_area_obs": include_area_obs,
             "include_shape_obs": include_shape_obs,
             "include_tag_id_obs": include_tag_id_obs,
-            "tag_center_coefficient" : cfg2["rl"].get("tag_center_coefficient", "not defined"),
-            "tag_area_coeff" : cfg2["rl"].get("tag_area_coefficient", "not defined"),
-            "tag_shape2_coeff" : cfg2["rl"].get("tag_shape2_coefficient", "not defined"),
-            "landing_w_xy" : cfg2["rl"].get("landing_w_xy", "not defined"),
-            "tag_shape_coeff" : cfg2["rl"].get("tag_shape_coeff", "not defined"),
-            "tag_area_small_coeff" : cfg2["rl"].get("tag_area_small_coeff", "not defined"),
-            "tag_vis_coeff" : cfg2["rl"].get("tag_vis_coeff", "not defined"),
-            "tag_smooth_coeff" : cfg2["rl"].get("tag_smooth_coeff", "not defined"),
+            "include_real_p_c_obs": include_real_p_c_obs,
+            "centering_w_xy" : cfg2["rl"].get("centering_w_xy", "not defined"),
+            "centering_xy_reward_scale" : cfg2["rl"].get("centering_xy_reward_scale", "not defined"),
+            "centering_w_z" : cfg2["rl"].get("centering_w_z", "not defined"),
+            "centering_survival_reward" : cfg2["rl"].get("centering_survival_reward", "not defined"),
+            "centering_w_action_hover" : cfg2["rl"].get("centering_w_action_hover", "not defined"),
+            "centering_w_tilt" : cfg2["rl"].get("centering_w_tilt", "not defined"),
+            "include_real_p_c_obs" :cfg2["rl"].get("include_real_p_c_obs", "not defined"),
+            "use_projected_uv_out_of_view" : cfg2["rl"].get("use_projected_uv_out_of_view", "not defined"),
             
             "algo" : "PPO",
             "seed" : args.seed,
@@ -671,7 +695,20 @@ def main():
                     "ent_coef": config['ent_coef'],
                     "vf_coef": config['vf_coef'],
                     "max_grad_norm": config['max_grad_norm'],
-                    "num_envs": config['num_envs']
+                    "num_envs": config['num_envs'],
+                    "include_prev_action" :config["include_prev_action"],
+                    "include_area_obs" : config["include_area_obs"],
+                    "include_shape_obs" : config["include_shape_obs"],
+                    "include_tag_id_obs" : config["include_tag_id_obs"],
+                    "include_real_p_c_obs" : config["include_real_p_c_obs"],
+                    "centering_w_xy" : config["centering_w_xy"],
+                    "centering_w_z" : config["centering_w_z"],
+                    "centering_survival_reward" : config["centering_survival_reward"],
+                    "centering_w_action_hover" : config["centering_w_action_hover"],
+                    "centering_xy_reward_scale" : config["centering_xy_reward_scale"],
+                    "centering_w_tilt" : config["centering_w_tilt"],
+                    "use_projected_uv_out_of_view" : config["use_projected_uv_out_of_view"],
+                    "include_real_p_c_obs" : config["include_real_p_c_obs"],
                 },
                 sync_tensorboard=True,  # SB3 TB 로그 자동 동기화
                 monitor_gym=False,      # 우리는 VecMonitor를 이미 씀
@@ -723,6 +760,7 @@ def main():
                 include_area_obs=include_area_obs,
                 include_shape_obs=include_shape_obs,
                 include_tag_id_obs=include_tag_id_obs,
+                include_real_p_c_obs=include_real_p_c_obs,
             )
             eval_callback = MeanRewardPerStepEvalCallback(
                 eval_env,

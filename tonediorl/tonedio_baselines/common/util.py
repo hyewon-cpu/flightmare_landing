@@ -6,10 +6,13 @@ import numpy as np
 
 
 class ConfigurationSaver:
-    def __init__(self, log_dir):
-        self._data_dir = log_dir + '/' + \
-            datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        os.makedirs(self._data_dir)
+    def __init__(self, log_dir, run_name=None):
+        if run_name is not None:
+            self._data_dir = log_dir + '/' + run_name
+        else:
+            self._data_dir = log_dir + '/' + \
+                datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        os.makedirs(self._data_dir, exist_ok=True)
 
         # if save_items is not None:
         #     for save_item in save_items:

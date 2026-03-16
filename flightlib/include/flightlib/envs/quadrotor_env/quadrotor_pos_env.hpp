@@ -117,10 +117,11 @@ class QuadrotorPosEnv final : public EnvBase {
   Vector<3> goal_ori_;
   Vector<3> goal_lin_vel_;
   Vector<3> goal_ang_vel_;
-  Scalar landing_w_xy_{1.0};
-  Scalar landing_xy_reward_scale_{0.2};
-  Scalar landing_w_z_{1.0};
-  Scalar landing_survival_reward_{0.0};
+  Scalar centering_w_xy_{1.0};
+  Scalar centering_xy_reward_scale_{0.2};
+  Scalar centering_w_z_{1.0};
+  Scalar centering_w_tilt_{0.0};
+  Scalar centering_survival_reward_{0.0};
   Scalar landing_w_vel_xy_near_{0.5};
   Scalar landing_w_vel_xy_far_{0.2};
   Scalar landing_w_vel_z_near_{0.5};
@@ -134,7 +135,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar landing_tilt_hard_penalty_{2.0};
   Scalar landing_time_penalty_{0.01};
   Scalar landing_w_body_rate_{0.0};
-  Scalar landing_w_action_hover_{0.0};
+  Scalar centering_w_action_hover_{0.0};
   Scalar landing_w_rate_cmd_xy_{0.0};
   Scalar landing_w_duv_{0.0};
   Scalar landing_z_safe_margin_{2.0};
@@ -184,6 +185,7 @@ class QuadrotorPosEnv final : public EnvBase {
   bool area_reward_mode_active_{false};
   int miss_count_{0};
   bool hold_last_tag_obs_{false};
+  bool use_projected_uv_out_of_view_{false};
   int stage_miss_threshold_{4};
   bool stage_require_next_visible_{true};
   Scalar stage_switch_bonus_{2.0};
@@ -217,11 +219,17 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar tag_area_coeff_{1.0};
   Scalar tag_shape_coeff_{1.0};
   Scalar tag_shape2_coeff_{0.0};
+  Scalar tag_target_area_{500.0};
+  Scalar tag_area_error_scale_{3.0};
+  Scalar tag_shape_error_scale_{8.0};
+  Scalar tag_center_progress_coeff_{20.0};
+  Scalar tag_missing_penalty_{5.0};
   Scalar tag_area_small_coeff_{1.0};
   Scalar tag_smooth_coeff_{0.01};
   Scalar tag_min_area_{30.0};
   Scalar last_total_reward_{0.0};
   Scalar last_r_xy_{0.0};
+  Scalar last_r_z_{0.0};
   Scalar last_r_vis_{0.0};
   Scalar last_r_center_{0.0};
   Scalar last_r_survival_{0.0};
@@ -235,8 +243,12 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar last_r_invisible_{0.0};
   Scalar last_r_switch_{0.0};
   Scalar last_observed_area_{-1.0};
+  Scalar last_r_center_progress_{0.0};
+  Scalar last_r_missing_tag_{0.0};
   bool last_tag_visible_{false};
   bool last_corners_visible_{false};
+  Scalar prev_center_error_{-1.0};
+  Scalar prev_xy_error_{-1.0};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;
