@@ -93,6 +93,8 @@ PYBIND11_MODULE(flightgym, m) {
          "Enable or disable episode truncation (useful for testing)")
     .def("getTruncationEnabled", &VecEnv<QuadrotorDotEnv>::getTruncationEnabled,
          "Get whether truncation is enabled")
+    .def("setLandingTerminalEnabled", &VecEnv<QuadrotorDotEnv>::setLandingTerminalEnabled,
+         "Enable or disable landing terminal condition")
     .def("__repr__", [](const VecEnv<QuadrotorDotEnv>& a) {
       return "RPG Drone Racing Dot Environment";
     });

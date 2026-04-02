@@ -271,6 +271,13 @@ bool VecEnv<EnvBase>::getTruncationEnabled(void) const { // hj added
   return truncation_enabled_;
 }
 
+template<typename EnvBase>
+void VecEnv<EnvBase>::setLandingTerminalEnabled(bool enabled) {
+  for (int i = 0; i < num_envs_; i++) {
+    envs_[i]->setLandingTerminalEnabled(enabled);
+  }
+}
+
 // template<typename EnvBase>
 // std::ostream& operator<<(std::ostream& os, const VecEnv<EnvBase>& env) {
 //   os.precision(3);

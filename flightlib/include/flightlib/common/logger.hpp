@@ -36,7 +36,7 @@ class Logger {
   template<typename T>
   std::ostream& operator<<(const T& printable) const;
 
-  static constexpr int MAX_CHARS = 256;
+  static constexpr int MAX_CHARS = 1024;
 
  private:
   static constexpr int DEFAULT_PRECISION = 3;

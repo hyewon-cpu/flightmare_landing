@@ -86,6 +86,7 @@ bool Quadrotor::reset(void) {
   state_.setZero();
   motor_omega_.setZero();
   motor_thrusts_.setZero();
+  collision_ = false;
   return true;
 }
 
@@ -94,6 +95,7 @@ bool Quadrotor::reset(const QuadState &state) {
   state_ = state;
   motor_omega_.setZero();
   motor_thrusts_.setZero();
+  collision_ = false;
   return true;
 }
 
@@ -135,7 +137,8 @@ bool Quadrotor::setCommand(const Command &cmd) {
   cmd_ = cmd;
 
   if (std::isfinite(cmd_.collective_thrust))
-    cmd_.collective_thrust = dynamics_.clampThrust(cmd_.collective_thrust);
+    cmd_.collective_thrust =
+      dynamics_.clampCollectiveThrust(cmd_.collective_thrust);
 
   if (cmd_.omega.allFinite()) cmd_.omega = dynamics_.clampBodyrates(cmd_.omega);
 
@@ -163,10 +166,12 @@ bool Quadrotor::setWorldBox(const Ref<Matrix<3, 2>> box) {
 
 bool Quadrotor::constrainInWorldBox(const QuadState &old_state) {
   if (!old_state.valid()) return false;
+  collision_ = false;
 
   // violate world box constraint in the x-axis
   if (state_.x(QS::POSX) < world_box_(0, 0) ||
       state_.x(QS::POSX) > world_box_(0, 1)) {
+    collision_ = true;
     state_.x(QS::POSX) = old_state.x(QS::POSX);
     state_.x(QS::VELX) = 0.0;
   }
@@ -174,19 +179,52 @@ bool Quadrotor::constrainInWorldBox(const QuadState &old_state) {
   // violate world box constraint in the y-axis
   if (state_.x(QS::POSY) < world_box_(1, 0) ||
       state_.x(QS::POSY) > world_box_(1, 1)) {
+    collision_ = true;
     state_.x(QS::POSY) = old_state.x(QS::POSY);
     state_.x(QS::VELY) = 0.0;
   }
 
-  // violate world box constraint in the x-axis
-  if (state_.x(QS::POSZ) <= world_box_(2, 0) ||
-      state_.x(QS::POSZ) > world_box_(2, 1)) {
-    //
-    state_.x(QS::POSZ) = world_box_(2, 0);
+  // Start zeroing commands slightly above the z lower bound so the vehicle
+  // settles before it reaches the hard floor.
+  const Scalar z_floor_guard = world_box_(2, 0) + 0.2;
+  if (state_.x(QS::POSZ) <= z_floor_guard) {
+    if (cmd_.isRatesThrust()) {
+      cmd_.collective_thrust = 0.0;
+      cmd_.omega.setZero();
+      cmd_.thrusts = Vector<4>::Constant(NAN);
+    } else if (cmd_.isSingleRotorThrusts()) {
+      cmd_.thrusts.setZero();
+      cmd_.collective_thrust = NAN;
+      cmd_.omega = Vector<3>::Constant(NAN);
+    }
+    motor_thrusts_.setZero();
+    motor_omega_.setZero();
+  }
+
+  // If the quadrotor falls below the z lower bound, roll back to the previous
+  // step state instead of treating it as a hard floor hit.
+  if (state_.x(QS::POSZ) <= world_box_(2, 0)) {
+    collision_ = true;
+    state_.x(QS::POSX) = old_state.x(QS::POSX);
+    state_.x(QS::POSY) = old_state.x(QS::POSY);
+    state_.x(QS::POSZ) = old_state.x(QS::POSZ);
+
+    // reset linear velocity and acceleration to stop further sinking
+    state_.x(QS::VELX) = 0.0;
+    state_.x(QS::VELY) = 0.0;
+    state_.x(QS::VELZ) = 0.0;
+    state_.a << 0.0, 0.0, 0.0;
+
+    // reset angular velocity as well so the vehicle settles at the recovered state
+    state_.w << 0.0, 0.0, 0.0;
+  } else if (state_.x(QS::POSZ) > world_box_(2, 1)) {
+    collision_ = true;
+    state_.x(QS::POSZ) = world_box_(2, 1);
 
     // reset velocity to zero
     state_.x(QS::VELX) = 0.0;
     state_.x(QS::VELY) = 0.0;
+    state_.x(QS::VELZ) = 0.0;
 
     // reset acceleration to zero
     state_.a << 0.0, 0.0, 0.0;

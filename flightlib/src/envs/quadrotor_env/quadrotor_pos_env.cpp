@@ -92,7 +92,7 @@ Scalar axisAlignmentPenalty(const std::array<Vector<2>, 4> &pts) {
   const Scalar a12 = std::abs(u12.x());
   const Scalar a23 = std::abs(u23.y());
   const Scalar a30 = std::abs(u30.x());
-  return (a01 + a12 + a23 + a30) * Scalar(0.25);
+  return (a01 + a12 + a23 + a30) * Scalar(0.25); //0-1 사이의 값. 0에 가까울수록 정렬 
 }
 
 bool tagObsCornersFromQuadObs(const Vector<quadposenv::kNObs> &quad_obs,
@@ -319,16 +319,19 @@ bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
   quad_obs_.setZero();
   quad_obs_.segment<quadposenv::kTagObs>(quadposenv::kObs).setConstant(-1.0);
   quad_act_.setZero();
+  prev_quad_act_.setZero();
+  prev_quad_act_valid_ = false;
   prev_corner_uv_.setZero();
   prev_corner_uv_valid_ = false;
   curr_tag_visible_.fill(false);
   estimated_p_C_.setZero();
   estimated_p_C_valid_ = false;
+  prev_tag_coord_.setZero();
+  last_tag_lin_vel_.setZero();
+  prev_tag_coord_valid_ = false;
   last_observed_area_ = -1.0;
   last_tag_visible_ = false;
   last_corners_visible_ = false;
-  prev_center_error_ = -1.0;
-  prev_xy_error_ = -1.0;
   stage_ = 0;
   area_reward_mode_active_ = false;
   miss_count_ = 0;
@@ -350,7 +353,7 @@ bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
     if (randomize_position_on_reset_) {
       quad_state_.x(QS::POSX) += uniform_dist_(random_gen_) * randomize_position_scale_;
        //random_gen_ : env_base.hpp 에 정의된 난수 생성기. 균등분포 uniform_dist_{-1.0,1.0} 로 정의됨 
-       //즉, [-1.1] 범위의 난수를 하나 뽑아서 위치 램덤하게 함. 
+       //즉, [-1,1] 범위의 난수를 하나 뽑아서 위치 램덤하게 함. 
        //randomize_position_scale_ : yaml에서 설정 가능. 위치 램덤하게 하는 정도. 1 이 기본값 
       quad_state_.x(QS::POSY) += uniform_dist_(random_gen_) * randomize_position_scale_;
       quad_state_.x(QS::POSZ) += uniform_dist_(random_gen_) * randomize_position_scale_;
@@ -373,18 +376,17 @@ bool QuadrotorPosEnv::reset(Ref<Vector<>> obs, const bool random) {
     }
     // reset orientation
     if (randomize_attitude_on_reset_) {
-      quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTX) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTY) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTZ) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      if (quad_state_.qx.norm() > 1e-9) {
-        quad_state_.qx /= quad_state_.qx.norm();
-      } else {
-        quad_state_.x(QS::ATTW) = 1.0;
-        quad_state_.x(QS::ATTX) = 0.0;
-        quad_state_.x(QS::ATTY) = 0.0;
-        quad_state_.x(QS::ATTZ) = 0.0;
-      }
+      const Scalar yaw =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar pitch =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar roll =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Quaternion q_delta(
+        Eigen::AngleAxis<Scalar>(yaw, Vector<3>::UnitZ()) *
+        Eigen::AngleAxis<Scalar>(pitch, Vector<3>::UnitY()) *
+        Eigen::AngleAxis<Scalar>(roll, Vector<3>::UnitX()));
+      quad_state_.q(q_delta.normalized());
     }
   }
   // reset quadrotor with random states
@@ -411,8 +413,8 @@ bool QuadrotorPosEnv::worldPointToCamera(const Ref<const Vector<3>> p_W,
                                          Ref<Vector<3>> p_C) const {
   const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
   const Vector<3> p_WB = quad_state_.p;
-  const Matrix<3, 3> R_WC = R_WB * R_BC_;
-  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_;
+  const Matrix<3, 3> R_WC = R_WB * R_BC_; //월드 좌표계에서 카메라 좌표계의 회전 정도 
+  const Vector<3> p_WC = p_WB + R_WB * B_r_BC_; //월드 좌표계에서 카메라의 위치
   p_C = R_WC.transpose() * (p_W - p_WC);
   return p_C.allFinite();
 }
@@ -458,6 +460,8 @@ bool QuadrotorPosEnv::projectWorldPointToImage(const Ref<const Vector<3>> p_W,
 
 bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
   quadrotor_ptr_->getState(&quad_state_);
+  const Vector<3> euler_zyx_obs =
+    quad_state_.q().toRotationMatrix().eulerAngles(2, 1, 0);
 
   if (!hold_last_tag_obs_) {
     quad_obs_.segment<quadposenv::kTagObs>(quadposenv::kObs).setConstant(-1.0);
@@ -571,11 +575,11 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
   std::array<Vector<2>, 4> tag0_corners;
   if (tagObsCornersFromQuadObs(quad_obs_, 0, &tag0_corners)) {
     last_metric_area_ = polygonArea(tag0_corners);
-    last_metric_shape2_ = -axisAlignmentPenalty(tag0_corners);
+    last_signed_shape_score_ = 0.0;
     last_observed_area_ = last_metric_area_;
   } else {
     last_metric_area_ = 0.0;
-    last_metric_shape2_ = 0.0;
+    last_signed_shape_score_ = 0.0;
     last_observed_area_ = -1.0;
   }
 
@@ -608,26 +612,32 @@ bool QuadrotorPosEnv::getObs(Ref<Vector<>> obs) {
 
 void QuadrotorPosEnv::updateExtraInfo() {
   quadrotor_ptr_->getState(&quad_state_);
+  const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+  const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
   extra_info_["drone_pos_x"] = quad_state_.x(QS::POSX);
   extra_info_["drone_pos_y"] = quad_state_.x(QS::POSY);
   extra_info_["drone_pos_z"] = quad_state_.x(QS::POSZ);
   extra_info_["drone_vel_x"] = quad_state_.x(QS::VELX);
   extra_info_["drone_vel_y"] = quad_state_.x(QS::VELY);
   extra_info_["drone_vel_z"] = quad_state_.x(QS::VELZ);
+  extra_info_["drone_ang_vel_x"] = quad_state_.x(QS::OMEX);
+  extra_info_["drone_ang_vel_y"] = quad_state_.x(QS::OMEY);
+  extra_info_["drone_ang_vel_z"] = quad_state_.x(QS::OMEZ);
+  extra_info_["imu_roll"] = euler_zyx(2);
+  extra_info_["imu_pitch"] = euler_zyx(1);
+  extra_info_["imu_yaw"] = euler_zyx(0);
 
   extra_info_["reward_total"] = last_total_reward_;
-  extra_info_["reward_xy"] = last_r_xy_;
-  extra_info_["reward_center"] = last_r_center_;
-  extra_info_["reward_z"] = last_r_z_;
-  extra_info_["reward_survival"] = last_r_survival_;
-  extra_info_["reward_action_hover"] = last_r_vis_;
+  extra_info_["reward_track_pos"] = last_r_track_pos_;
+  extra_info_["reward_track_ori"] = last_r_track_ori_;
+  extra_info_["reward_track_lin_vel"] = last_r_track_lin_vel_;
+  extra_info_["reward_track_tag_pos"] = last_r_track_tag_pos_;
+  extra_info_["reward_track_tag_lin_vel"] = last_r_track_tag_lin_vel_;
+  extra_info_["reward_track_ang_vel"] = last_r_track_ang_vel_;
+  extra_info_["reward_track_act"] = last_r_track_act_;
+  extra_info_["reward_track_survival"] = last_r_track_survival_;
   extra_info_["metric_area"] = last_metric_area_;
-  extra_info_["metric_shape2"] = last_metric_shape2_;
-  extra_info_["reward_area"] = last_r_area_;
-  extra_info_["reward_shape"] = last_r_shape_;
-  extra_info_["reward_shape2"] = last_r_shape2_;
-  extra_info_["reward_center_progress"] = last_r_center_progress_;
-  extra_info_["reward_missing_tag"] = last_r_missing_tag_;
+  extra_info_["signed_shape_score"] = last_signed_shape_score_;
   extra_info_["estimated_p_c_x"] = estimated_p_C_valid_ ? estimated_p_C_.x() : 0.0f;
   extra_info_["estimated_p_c_y"] = estimated_p_C_valid_ ? estimated_p_C_.y() : 0.0f;
   extra_info_["estimated_p_c_z"] = estimated_p_C_valid_ ? estimated_p_C_.z() : 0.0f;
@@ -656,174 +666,151 @@ Scalar QuadrotorPosEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
 
   // update observations
   getObs(obs);
-
-  const int target_tag_idx = 0;
-  const Scalar xy_error =
-    (quad_state_.p.head<2>() - tag_center_world_[target_tag_idx].head<2>()).norm();
-  const Scalar prev_xy_error_for_log = prev_xy_error_;
-  Scalar xy_error_delta = 0.0;
-  const Scalar z_error =
-    quad_state_.x(QS::POSZ) - (tag_center_world_[target_tag_idx].z()+37.0);
   const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
-  const Scalar cos_tilt =
-    std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
-  const Scalar tilt = std::acos(cos_tilt);
-  Scalar reward_xy = 0.0;
-  if (prev_xy_error_ >= Scalar(0.0)) {
-    xy_error_delta = prev_xy_error_ - xy_error;
-    reward_xy = centering_w_xy_ * xy_error_delta;
+  const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
+  const Scalar reward_track_pos =
+    pos_coeff_ * (quad_state_.p - goal_pos_).squaredNorm();
+  const Scalar reward_track_ori =
+    ori_coeff_ * (euler_zyx - goal_ori_).squaredNorm();
+  const Scalar reward_track_lin_vel =
+    lin_vel_coeff_ * (quad_state_.v - goal_lin_vel_).squaredNorm();
+  const int obs_base = quadposenv::kObs;
+  const Vector<3> curr_tag_pos =
+    (Vector<3>() <<
+      quad_obs_(obs_base + quadposenv::kCenterX),
+      quad_obs_(obs_base + quadposenv::kCenterY),
+      last_metric_area_).finished();
+  const Scalar reward_track_tag_pos =
+    tag_pos_coeff_ * (curr_tag_pos - goal_tag_pos_).squaredNorm();
+  Vector<10> curr_tag_coord = Vector<10>::Zero();
+  bool curr_tag_coord_valid = false;
+  if (quad_obs_(obs_base + quadposenv::kTagId) >= 0.0) {
+    curr_tag_coord <<
+      quad_obs_(obs_base + quadposenv::kCenterX),
+      quad_obs_(obs_base + quadposenv::kCenterY),
+      quad_obs_(obs_base + quadposenv::kCorner0X),
+      quad_obs_(obs_base + quadposenv::kCorner0Y),
+      quad_obs_(obs_base + quadposenv::kCorner1X),
+      quad_obs_(obs_base + quadposenv::kCorner1Y),
+      quad_obs_(obs_base + quadposenv::kCorner2X),
+      quad_obs_(obs_base + quadposenv::kCorner2Y),
+      quad_obs_(obs_base + quadposenv::kCorner3X),
+      quad_obs_(obs_base + quadposenv::kCorner3Y);
+    curr_tag_coord_valid = true;
   }
-  prev_xy_error_ = xy_error;
-  const Scalar reward_z = -centering_w_z_ * (z_error * z_error);
-  const Scalar reward_tilt = -centering_w_tilt_ * (tilt * tilt);
-  const Scalar reward_survival = centering_survival_reward_;
-  const Scalar action_hover_error =
-    (quad_act_(0) - Scalar(0)) * (quad_act_(0) - Scalar(0)) +
-    quad_act_(1) * quad_act_(1) +
-    quad_act_(2) * quad_act_(2) +
-    quad_act_(3) * quad_act_(3);
-  const Scalar reward_action_hover = -centering_w_action_hover_ * action_hover_error;
-  const Scalar half_w = static_cast<Scalar>(quadposenv::kImgWidth - 1) * Scalar(0.5);
-  const Scalar half_h = static_cast<Scalar>(quadposenv::kImgHeight - 1) * Scalar(0.5);
-  const Scalar eps = static_cast<Scalar>(1e-6);
-
-  Scalar reward_center = 0.0;
-  Scalar reward_center_progress = 0.0;
-  Scalar reward_area = 0.0;
-  Scalar reward_shape = 0.0;
-  Scalar reward_missing_tag = 0.0;
-  Scalar metric_area = 0.0;
-  Scalar metric_shape = 0.0;
-  Scalar center_error = -1.0;
-  Scalar prev_center_error_for_log = prev_center_error_;
-  Scalar center_error_delta = 0.0;
-
-  std::array<Vector<2>, 4> tag0_corners;
-  if (tagObsCornersFromQuadObs(quad_obs_, 0, &tag0_corners)) {
-    const Scalar center_x = quad_obs_(quadposenv::kCenterX);
-    const Scalar center_y = quad_obs_(quadposenv::kCenterY);
-    const Scalar ex = (center_x - half_w) / std::max(half_w, eps);
-    const Scalar ey = (center_y - half_h) / std::max(half_h, eps);
-    center_error = std::sqrt(ex * ex + ey * ey);
-    const Scalar center_score = Scalar(1.0) / (Scalar(1.0) + center_error);
-    if (prev_center_error_ >= Scalar(0.0)) {
-      center_error_delta = prev_center_error_ - center_error;
-      reward_center_progress =
-        tag_center_progress_coeff_ * center_error_delta;
-    }
-    prev_center_error_ = center_error;
-
-    metric_area = polygonArea(tag0_corners);
-    const Scalar target_area = std::max(tag_target_area_, Scalar(1.0));
-    const Scalar area_error =
-      std::abs(metric_area - target_area) / std::max(target_area, eps);
-    const Scalar area_score = std::exp(-tag_area_error_scale_ * area_error);
-
-    const Scalar shape_penalty = axisAlignmentPenalty(tag0_corners);
-    const Scalar shape_score =
-      std::exp(-tag_shape_error_scale_ * shape_penalty);
-
-    reward_center = tag_center_coeff_ * center_score;
-    reward_area = tag_area_coeff_ * area_score;
-    reward_shape = tag_shape_coeff_ * shape_score;
-    metric_shape = shape_score;
+  Vector<10> tag_lin_vel = last_tag_lin_vel_;
+  if (curr_tag_coord_valid && prev_tag_coord_valid_) {
+    const Scalar safe_dt = std::max(sim_dt_, Scalar(1e-6));
+    tag_lin_vel = (curr_tag_coord - prev_tag_coord_) / safe_dt;
+    last_tag_lin_vel_ = tag_lin_vel;
+  }
+  const Scalar reward_track_tag_lin_vel =
+    tag_lin_vel_coeff_ * (tag_lin_vel - goal_tag_lin_vel_).squaredNorm();
+  const Scalar reward_track_ang_vel =
+    ang_vel_coeff_ * (quad_state_.w - goal_ang_vel_).squaredNorm();
+  const Scalar reward_track_act = act_coeff_ * act.cast<Scalar>().norm();
+  const Scalar reward_survival = survival_reward_;
+  if (curr_tag_coord_valid) {
+    prev_tag_coord_ = curr_tag_coord;
+    prev_tag_coord_valid_ = true;
   } else {
-    prev_center_error_ = -1.0;
-    reward_missing_tag = -tag_missing_penalty_;
+    prev_tag_coord_valid_ = false;
   }
+  prev_quad_act_ = quad_act_;
+  prev_quad_act_valid_ = true;
 
   const Scalar total_reward =
-    reward_xy + reward_z + reward_tilt + reward_survival + reward_action_hover +
-    reward_center + reward_center_progress + reward_area + reward_shape +
-    reward_missing_tag;
+    reward_track_pos + reward_track_ori + reward_track_lin_vel +
+    reward_track_tag_pos + reward_track_tag_lin_vel +
+    reward_track_ang_vel + reward_track_act +
+    reward_survival;
 
   last_total_reward_ = total_reward;
-  last_r_xy_ = reward_xy;
-  last_r_z_ = reward_z;
-  last_r_vis_ = reward_action_hover;
-  last_r_center_ = reward_center;
-  last_r_survival_ = reward_survival;
-  last_metric_area_ = metric_area;
-  last_metric_shape2_ = metric_shape;
-  last_r_area_ = reward_area;
-  last_r_shape_ = reward_shape;
-  last_r_shape2_ = tag_shape2_coeff_ * metric_shape;
-  last_r_center_progress_ = reward_center_progress;
-  last_r_missing_tag_ = reward_missing_tag;
-  last_r_area_small_ = 0.0;
-  last_r_smooth_ = 0.0;
-  last_r_invisible_ = 0.0;
-  last_r_switch_ = 0.0;
-
-  const Vector<3> euler_zyx_log = R_WB.eulerAngles(2, 1, 0);
-  const Scalar yaw_log = euler_zyx_log(0);
+  last_r_track_pos_ = reward_track_pos;
+  last_r_track_ori_ = reward_track_ori;
+  last_r_track_lin_vel_ = reward_track_lin_vel;
+  last_r_track_tag_pos_ = reward_track_tag_pos;
+  last_r_track_tag_lin_vel_ = reward_track_tag_lin_vel;
+  last_r_track_ang_vel_ = reward_track_ang_vel;
+  last_r_track_act_ = reward_track_act;
+  last_r_track_survival_ = reward_survival;
 
   log_counter_++;
-  if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
+  if (enable_step_log_ && (log_counter_ % std::max(1, log_interval_steps_) == 0)) {
+    const bool tag0_visible = quad_obs_(obs_base + quadposenv::kTagId) >= 0.0;
     logger_.info(
-      "quad pos | x=%.3f y=%.3f z=%.3f yaw=%.4f tilt=%.4f",
-      quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ),
-      yaw_log, tilt);
+      "reward | total=%.4f track_pos=%.4f track_ori=%.4f track_lin_vel=%.4f track_tag_pos=%.4f track_tag_lin_vel=%.4f track_ang_vel=%.4f track_act=%.4f track_survival=%.4f pos=(%.3f, %.3f, %.3f)",
+      total_reward,
+      reward_track_pos,
+      reward_track_ori,
+      reward_track_lin_vel,
+      reward_track_tag_pos,
+      reward_track_tag_lin_vel,
+      reward_track_ang_vel,
+      reward_track_act,
+      reward_survival,
+      quad_state_.x(QS::POSX),
+      quad_state_.x(QS::POSY),
+      quad_state_.x(QS::POSZ)
+    );
     logger_.info(
-      "reward | tot=%.2f xy=%.2f pxy=%.3f dxy=%.3f z=%.2f c=%.2f cp=%.2f cerr=%.3f pc=%.3f d=%.3f a=%.2f s=%.2f miss=%.2f tilt=%.2f act=%.2f area=%.1f shape=%.2f",
-      total_reward, reward_xy, prev_xy_error_for_log, xy_error_delta, reward_z, reward_center, reward_center_progress,
-      center_error, prev_center_error_for_log, center_error_delta,
-      reward_area, reward_shape, reward_missing_tag,
-      reward_tilt, reward_action_hover, metric_area, metric_shape);
-    logger_.info(
-      "uv | c=(%.1f,%.1f) p0=(%.1f,%.1f) p1=(%.1f,%.1f) p2=(%.1f,%.1f) p3=(%.1f,%.1f)",
-      quad_obs_(quadposenv::kCenterX), quad_obs_(quadposenv::kCenterY),
-      quad_obs_(quadposenv::kCorner0X), quad_obs_(quadposenv::kCorner0Y),
-      quad_obs_(quadposenv::kCorner1X), quad_obs_(quadposenv::kCorner1Y),
-      quad_obs_(quadposenv::kCorner2X), quad_obs_(quadposenv::kCorner2Y),
-      quad_obs_(quadposenv::kCorner3X), quad_obs_(quadposenv::kCorner3Y));
+      "tag0 | visible=%d id=%.0f center=(%.2f, %.2f) area=%.2f c0=(%.2f, %.2f) c1=(%.2f, %.2f) c2=(%.2f, %.2f) c3=(%.2f, %.2f)",
+      static_cast<int>(tag0_visible),
+      quad_obs_(obs_base + quadposenv::kTagId),
+      quad_obs_(obs_base + quadposenv::kCenterX),
+      quad_obs_(obs_base + quadposenv::kCenterY),
+      last_metric_area_,
+      quad_obs_(obs_base + quadposenv::kCorner0X),
+      quad_obs_(obs_base + quadposenv::kCorner0Y),
+      quad_obs_(obs_base + quadposenv::kCorner1X),
+      quad_obs_(obs_base + quadposenv::kCorner1Y),
+      quad_obs_(obs_base + quadposenv::kCorner2X),
+      quad_obs_(obs_base + quadposenv::kCorner2Y),
+      quad_obs_(obs_base + quadposenv::kCorner3X),
+      quad_obs_(obs_base + quadposenv::kCorner3Y)
+    );
   }
 
   return total_reward;
 }
 
 bool QuadrotorPosEnv::isTerminalState(Scalar &reward) {
-  const bool hit_world_box =
-    (quad_state_.x(QS::POSX) <= world_box_(0, 0)+0.001) ||
-    (quad_state_.x(QS::POSX) >= world_box_(0, 1)-0.001) ||
-    (quad_state_.x(QS::POSY) <= world_box_(1, 0)+0.001) ||
-    (quad_state_.x(QS::POSY) >= world_box_(1, 1)-0.001) ||
-    (quad_state_.x(QS::POSZ) <= world_box_(2, 0)+0.001) ||
-    (quad_state_.x(QS::POSZ) >= world_box_(2, 1)-0.001);
-  if (hit_world_box) {
-    if (log_counter_ % std::max(1, log_interval_steps_) == 0){
+  if (quadrotor_ptr_ != nullptr && quadrotor_ptr_->getCollision()) {
+    if (enable_step_log_ &&
+        log_counter_ % std::max(1, log_interval_steps_) == 0) {
       logger_.warn(
-        "terminate reason=world_box "
+        std::string("terminate reason=world_box_collision ") +
         "pos=(" + std::to_string(quad_state_.x(QS::POSX)) + ", " +
         std::to_string(quad_state_.x(QS::POSY)) + ", " +
-        std::to_string(quad_state_.x(QS::POSZ)) + ") "
-        "box=[(" + std::to_string(world_box_(0, 0)) + ", " +
-        std::to_string(world_box_(0, 1)) + "), (" +
-        std::to_string(world_box_(1, 0)) + ", " +
-        std::to_string(world_box_(1, 1)) + "), (" +
-        std::to_string(world_box_(2, 0)) + ", " +
-        std::to_string(world_box_(2, 1)) + ")]");}
+        std::to_string(quad_state_.x(QS::POSZ)) + ")"
+      );
+    }
     reward = landing_failure_reward_;
     return true;
   }
 
-  // Early terminate on excessive tilt computed from quaternion / rotation matrix.
-  {
-    const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
-    const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
-    const Scalar cos_tilt =
-      std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
-    const Scalar tilt = std::acos(cos_tilt);
-    if (tilt > landing_tilt_hard_) {
-      if (log_counter_ % std::max(1, log_interval_steps_) == 0){
-        logger_.warn(
-          "terminate reason=attitude_limit "
-          "yaw=" + std::to_string(euler_zyx(0)) +
-          " tilt=" + std::to_string(tilt) +
-          " threshold=" + std::to_string(landing_tilt_hard_));}
-      reward = landing_tilt_hard_penalty_;
-      return true;
+  // Terminate as soon as the quadrotor touches or crosses world box bounds.
+  const Scalar px = quad_state_.x(QS::POSX);
+  const Scalar py = quad_state_.x(QS::POSY);
+  const Scalar pz = quad_state_.x(QS::POSZ);
+  const Scalar eps = 1e-6;
+  const bool touch_world_box =
+    (px <= world_box_(0, 0) + eps) || (px >= world_box_(0, 1) - eps) ||
+    (py <= world_box_(1, 0) + eps) || (py >= world_box_(1, 1) - eps) ||
+    (pz <= world_box_(2, 0) + eps) || (pz >= world_box_(2, 1) - eps);
+  if (touch_world_box) {
+    if (enable_step_log_ &&
+        log_counter_ % std::max(1, log_interval_steps_) == 0) {
+      logger_.warn(
+        std::string("terminate reason=world_box_touch ") +
+        "pos=(" + std::to_string(px) + ", " + std::to_string(py) + ", " + std::to_string(pz) + ") " +
+        "world_box=[x:" + std::to_string(world_box_(0, 0)) + "," + std::to_string(world_box_(0, 1)) + "]" +
+        "[y:" + std::to_string(world_box_(1, 0)) + "," + std::to_string(world_box_(1, 1)) + "]" +
+        "[z:" + std::to_string(world_box_(2, 0)) + "," + std::to_string(world_box_(2, 1)) + "]"
+      );
     }
+    reward = landing_failure_reward_;
+    return true;
   }
 
   // Ground plane is assumed around z=3.0.
@@ -839,7 +826,8 @@ bool QuadrotorPosEnv::isTerminalState(Scalar &reward) {
     const Scalar cos_tilt =
       std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
     const Scalar tilt = std::acos(cos_tilt);
-    if (log_counter_ % std::max(1, log_interval_steps_) == 0){
+    if (enable_step_log_ &&
+        log_counter_ % std::max(1, log_interval_steps_) == 0) {
       logger_.warn(
         std::string("terminate reason=landing_terminal ") +
         "z=" + std::to_string(quad_state_.x(QS::POSZ)) +
@@ -979,68 +967,66 @@ bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
   }
 
   if (cfg["rl"]) {
-    // load reinforcement learning related parameters
-    if (cfg["rl"]["centering_w_xy"]) {
-      centering_w_xy_ = cfg["rl"]["centering_w_xy"].as<Scalar>();
-    } else if (cfg["rl"]["landing_w_xy"]) {
-      centering_w_xy_ = cfg["rl"]["landing_w_xy"].as<Scalar>();
+    if (cfg["rl"]["pos_coeff"]) {
+      pos_coeff_ = cfg["rl"]["pos_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["centering_xy_reward_scale"]) {
-      centering_xy_reward_scale_ = cfg["rl"]["centering_xy_reward_scale"].as<Scalar>();
-    } else if (cfg["rl"]["landing_xy_reward_scale"]) {
-      centering_xy_reward_scale_ = cfg["rl"]["landing_xy_reward_scale"].as<Scalar>();
+    if (cfg["rl"]["ori_coeff"]) {
+      ori_coeff_ = cfg["rl"]["ori_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["centering_w_z"]) {
-      centering_w_z_ = cfg["rl"]["centering_w_z"].as<Scalar>();
-    } else if (cfg["rl"]["landing_w_z"]) {
-      centering_w_z_ = cfg["rl"]["landing_w_z"].as<Scalar>();
+    if (cfg["rl"]["lin_vel_coeff"]) {
+      lin_vel_coeff_ = cfg["rl"]["lin_vel_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["centering_w_tilt"]) {
-      centering_w_tilt_ = cfg["rl"]["centering_w_tilt"].as<Scalar>();
-    } else if (cfg["rl"]["landing_w_tilt"]) {
-      centering_w_tilt_ = cfg["rl"]["landing_w_tilt"].as<Scalar>();
+    if (cfg["rl"]["tag_pos_coeff"]) {
+      tag_pos_coeff_ = cfg["rl"]["tag_pos_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["centering_survival_reward"]) {
-      centering_survival_reward_ = cfg["rl"]["centering_survival_reward"].as<Scalar>();
-    } else if (cfg["rl"]["landing_survival_reward"]) {
-      centering_survival_reward_ = cfg["rl"]["landing_survival_reward"].as<Scalar>();
+    if (cfg["rl"]["tag_lin_vel_coeff"]) {
+      tag_lin_vel_coeff_ = cfg["rl"]["tag_lin_vel_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["centering_w_action_hover"]) {
-      centering_w_action_hover_ = cfg["rl"]["centering_w_action_hover"].as<Scalar>();
-    } else if (cfg["rl"]["landing_w_action_hover"]) {
-      centering_w_action_hover_ = cfg["rl"]["landing_w_action_hover"].as<Scalar>();
+    if (cfg["rl"]["ang_vel_coeff"]) {
+      ang_vel_coeff_ = cfg["rl"]["ang_vel_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["tag_center_coeff"]) {
-      tag_center_coeff_ = cfg["rl"]["tag_center_coeff"].as<Scalar>();
+    if (cfg["rl"]["act_coeff"]) {
+      act_coeff_ = cfg["rl"]["act_coeff"].as<Scalar>();
     }
-    if (cfg["rl"]["tag_area_coeff"]) {
-      tag_area_coeff_ = cfg["rl"]["tag_area_coeff"].as<Scalar>();
+    if (cfg["rl"]["survival_reward"]) {
+      survival_reward_ = cfg["rl"]["survival_reward"].as<Scalar>();
     }
-    if (cfg["rl"]["tag_shape_coeff"]) {
-      tag_shape_coeff_ = cfg["rl"]["tag_shape_coeff"].as<Scalar>();
+    if (cfg["rl"]["goal_pos"] && cfg["rl"]["goal_pos"].IsSequence() &&
+        cfg["rl"]["goal_pos"].size() == 3) {
+      goal_pos_ << cfg["rl"]["goal_pos"][0].as<Scalar>(),
+        cfg["rl"]["goal_pos"][1].as<Scalar>(),
+        cfg["rl"]["goal_pos"][2].as<Scalar>();
     }
-    if (cfg["rl"]["tag_shape2_coeff"]) {
-      tag_shape2_coeff_ = cfg["rl"]["tag_shape2_coeff"].as<Scalar>();
-    } else if (cfg["rl"]["tag_shape_coeff"]) {
-      tag_shape2_coeff_ = cfg["rl"]["tag_shape_coeff"].as<Scalar>();
+    if (cfg["rl"]["goal_ori"] && cfg["rl"]["goal_ori"].IsSequence() &&
+        cfg["rl"]["goal_ori"].size() == 3) {
+      goal_ori_ << cfg["rl"]["goal_ori"][0].as<Scalar>(),
+        cfg["rl"]["goal_ori"][1].as<Scalar>(),
+        cfg["rl"]["goal_ori"][2].as<Scalar>();
     }
-    if (cfg["rl"]["tag_target_area"]) {
-      tag_target_area_ = cfg["rl"]["tag_target_area"].as<Scalar>();
+    if (cfg["rl"]["goal_lin_vel"] && cfg["rl"]["goal_lin_vel"].IsSequence() &&
+        cfg["rl"]["goal_lin_vel"].size() == 3) {
+      goal_lin_vel_ << cfg["rl"]["goal_lin_vel"][0].as<Scalar>(),
+        cfg["rl"]["goal_lin_vel"][1].as<Scalar>(),
+        cfg["rl"]["goal_lin_vel"][2].as<Scalar>();
     }
-    if (cfg["rl"]["tag_area_error_scale"]) {
-      tag_area_error_scale_ = cfg["rl"]["tag_area_error_scale"].as<Scalar>();
+    if (cfg["rl"]["goal_tag_pos"] && cfg["rl"]["goal_tag_pos"].IsSequence() &&
+        cfg["rl"]["goal_tag_pos"].size() == 3) {
+      for (int i = 0; i < 3; i++) {
+        goal_tag_pos_(i) = cfg["rl"]["goal_tag_pos"][i].as<Scalar>();
+      }
     }
-    if (cfg["rl"]["tag_shape_error_scale"]) {
-      tag_shape_error_scale_ = cfg["rl"]["tag_shape_error_scale"].as<Scalar>();
+    if (cfg["rl"]["goal_ang_vel"] && cfg["rl"]["goal_ang_vel"].IsSequence() &&
+        cfg["rl"]["goal_ang_vel"].size() == 3) {
+      goal_ang_vel_ << cfg["rl"]["goal_ang_vel"][0].as<Scalar>(),
+        cfg["rl"]["goal_ang_vel"][1].as<Scalar>(),
+        cfg["rl"]["goal_ang_vel"][2].as<Scalar>();
     }
-    if (cfg["rl"]["tag_center_progress_coeff"]) {
-      tag_center_progress_coeff_ =
-        cfg["rl"]["tag_center_progress_coeff"].as<Scalar>();
+    if (cfg["rl"]["goal_tag_lin_vel"] && cfg["rl"]["goal_tag_lin_vel"].IsSequence() &&
+        cfg["rl"]["goal_tag_lin_vel"].size() == 10) {
+      for (int i = 0; i < 10; i++) {
+        goal_tag_lin_vel_(i) = cfg["rl"]["goal_tag_lin_vel"][i].as<Scalar>();
+      }
     }
-    if (cfg["rl"]["tag_missing_penalty"]) {
-      tag_missing_penalty_ = cfg["rl"]["tag_missing_penalty"].as<Scalar>();
-    }
-
     if (cfg["rl"]["hold_last_tag_obs"]) {
       hold_last_tag_obs_ = cfg["rl"]["hold_last_tag_obs"].as<bool>();
     }
@@ -1058,34 +1044,24 @@ bool QuadrotorPosEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["landing_terminal_z"]) {
       landing_terminal_z_ = cfg["rl"]["landing_terminal_z"].as<Scalar>();
     }
-    if (cfg["rl"]["landing_success_xy_error"]) {
-      landing_success_xy_error_ = cfg["rl"]["landing_success_xy_error"].as<Scalar>();
-    }
-    if (cfg["rl"]["landing_success_vz"]) {
-      landing_success_vz_ = cfg["rl"]["landing_success_vz"].as<Scalar>();
-    }
-    if (cfg["rl"]["landing_success_tilt"]) {
-      landing_success_tilt_ = cfg["rl"]["landing_success_tilt"].as<Scalar>();
-    }
-    if (cfg["rl"]["landing_success_vxy"]) {
-      landing_success_vxy_ = cfg["rl"]["landing_success_vxy"].as<Scalar>();
-    }
-    if (cfg["rl"]["landing_success_body_rate"]) {
-      landing_success_body_rate_ =
-        cfg["rl"]["landing_success_body_rate"].as<Scalar>();
-    }
-    if (cfg["rl"]["landing_success_reward"]) {
-      landing_success_reward_ = cfg["rl"]["landing_success_reward"].as<Scalar>();
-    }
+
     if (cfg["rl"]["landing_failure_reward"]) {
       landing_failure_reward_ = cfg["rl"]["landing_failure_reward"].as<Scalar>();
     }
     if (cfg["rl"]["log_interval_steps"]) {
       log_interval_steps_ = std::max(1, cfg["rl"]["log_interval_steps"].as<int>());
     }
+    if (cfg["rl"]["enable_step_log"]) {
+      enable_step_log_ = cfg["rl"]["enable_step_log"].as<bool>();
+    }
   } else {
     return false;
   }
+
+  // Keep C++ raw observation fixed. PPO-facing composition is handled in
+  // the Python wrapper via YAML toggles.
+  obs_dim_ = quadposenv::kNObs;
+
   return true;
 }
 

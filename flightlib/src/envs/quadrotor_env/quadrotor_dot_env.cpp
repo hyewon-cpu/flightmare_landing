@@ -283,6 +283,7 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
   area_reward_mode_active_ = false;
   miss_count_ = 0;
   last_visible_area_ = -1.0;
+  prev_xy_error_ = -1.0;
   miss_start_prev_area_ = -1.0;
 
   // deterministic base state from YAML
@@ -323,18 +324,17 @@ bool QuadrotorDotEnv::reset(Ref<Vector<>> obs, const bool random) {
     }
     // reset orientation
     if (randomize_attitude_on_reset_) {
-      quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTX) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTY) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTZ) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      if (quad_state_.qx.norm() > 1e-9) {
-        quad_state_.qx /= quad_state_.qx.norm();
-      } else {
-        quad_state_.x(QS::ATTW) = 1.0;
-        quad_state_.x(QS::ATTX) = 0.0;
-        quad_state_.x(QS::ATTY) = 0.0;
-        quad_state_.x(QS::ATTZ) = 0.0;
-      }
+      const Scalar yaw =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar pitch =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar roll =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Quaternion q_delta(
+        Eigen::AngleAxis<Scalar>(yaw, Vector<3>::UnitZ()) *
+        Eigen::AngleAxis<Scalar>(pitch, Vector<3>::UnitY()) *
+        Eigen::AngleAxis<Scalar>(roll, Vector<3>::UnitX()));
+      quad_state_.q(q_delta.normalized());
     }
   }
   // reset quadrotor with random states
@@ -408,6 +408,7 @@ bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
     quad_obs_.segment<quaddotenv::kTagObs>(quaddotenv::kObs).setConstant(-1.0);
   }
   curr_tag_visible_.fill(false);
+  curr_tag_visible2_.fill(false);
 
   if (log_world_pose_) {
     world_pose_log_counter_++;
@@ -482,13 +483,21 @@ bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
     const bool tag_visible =
       center_projected && center_in_image && all_corners_projected && all_corners_in_image;
     curr_tag_visible_[tag_idx] = tag_visible;
-    if (tag_visible) {
+    const bool write_projected_uv =
+      tag_visible ||
+      (use_projected_uv_out_of_view_ && center_projected && all_corners_projected);
+    curr_tag_visible2_[tag_idx] = write_projected_uv;
+    if (write_projected_uv) {
       set_obs_from_center_uv(center_uv, obs_base + quaddotenv::kCenterX);
       set_obs_from_center_uv(corner_uv[0], obs_base + quaddotenv::kCorner0X);
       set_obs_from_center_uv(corner_uv[1], obs_base + quaddotenv::kCorner1X);
       set_obs_from_center_uv(corner_uv[2], obs_base + quaddotenv::kCorner2X);
       set_obs_from_center_uv(corner_uv[3], obs_base + quaddotenv::kCorner3X);
-      quad_obs_(obs_base + quaddotenv::kTagId) = static_cast<Scalar>(tag_idx);
+      if (tag_visible) {
+        quad_obs_(obs_base + quaddotenv::kTagId) = static_cast<Scalar>(tag_idx);
+      } else {
+        quad_obs_(obs_base + quaddotenv::kTagId) = -1.0;
+      }
     }
   }
 
@@ -521,12 +530,17 @@ bool QuadrotorDotEnv::getObs(Ref<Vector<>> obs) {
 
 void QuadrotorDotEnv::updateExtraInfo() {
   quadrotor_ptr_->getState(&quad_state_);
+  const Matrix<3, 3> R_WB = quad_state_.q().toRotationMatrix();
+  const Vector<3> euler_zyx = R_WB.eulerAngles(2, 1, 0);
   extra_info_["drone_pos_x"] = quad_state_.x(QS::POSX);
   extra_info_["drone_pos_y"] = quad_state_.x(QS::POSY);
   extra_info_["drone_pos_z"] = quad_state_.x(QS::POSZ);
   extra_info_["drone_vel_x"] = quad_state_.x(QS::VELX);
   extra_info_["drone_vel_y"] = quad_state_.x(QS::VELY);
   extra_info_["drone_vel_z"] = quad_state_.x(QS::VELZ);
+  extra_info_["drone_yaw"] = euler_zyx(0);
+  extra_info_["drone_pitch"] = euler_zyx(1);
+  extra_info_["drone_roll"] = euler_zyx(2);
 
   extra_info_["reward_total"] = last_total_reward_;
   extra_info_["reward_xy"] = last_r_xy_;
@@ -540,8 +554,11 @@ void QuadrotorDotEnv::updateExtraInfo() {
   extra_info_["reward_area_small"] = last_r_area_small_;
   extra_info_["reward_smooth"] = last_r_smooth_;
   extra_info_["reward_invisible"] = last_r_invisible_;
+  extra_info_["reward_invisible_xy"] = last_r_invisible_xy_;
+  extra_info_["reward_visible_xy"] = last_r_visible_xy_;
   extra_info_["reward_switch"] = last_r_switch_;
   extra_info_["tag_visible"] = last_tag_visible_ ? 1.0f : 0.0f;
+  extra_info_["tag_visible2"] = last_tag_visible2_ ? 1.0f : 0.0f;
   extra_info_["corners_visible"] = last_corners_visible_ ? 1.0f : 0.0f;
   extra_info_["observed_area"] = last_observed_area_;
   extra_info_["stage"] = static_cast<float>(stage_);
@@ -550,6 +567,16 @@ void QuadrotorDotEnv::updateExtraInfo() {
 
 Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   quad_act_ = act.cwiseProduct(act_std_) + act_mean_;
+  const Scalar z_floor_guard = world_box_(2, 0) + 0.2;
+  quadrotor_ptr_->getState(&quad_state_);
+  if (quad_state_.x(QS::POSZ) <= z_floor_guard) {
+    if (use_ctbr_) {
+      quad_act_.setZero();
+      quad_act_(0) = 0.0;
+    } else {
+      quad_act_.setZero();
+    }
+  }
   cmd_.t += sim_dt_;
   if (use_ctbr_) {
     cmd_.collective_thrust = quad_act_(0);
@@ -584,12 +611,14 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
 
   const bool tag_visible = curr_tag_visible_[active_tag_idx];
   const bool corners_visible = curr_tag_visible_[active_tag_idx];
+  const bool tag_visible2 = curr_tag_visible2_[active_tag_idx];
     //quad_obs_ = QuadrotorDotEnv 내부에서 쓰는 관측 벡터 버퍼 . Vector<quaddotenv::kNObs>. 태그 투영값들 + RGB 펼친 값
     //매 step/reset 때 getObs()에서 채운 뒤, 최종 obs로 복사됩니다.
 
   Scalar r_vis = tag_visible ? 1.0 : -1.0;
   const Scalar xy_error =
     (quad_state_.p.head<2>() - tag_center_world_[active_tag_idx].head<2>()).norm();
+  const Scalar prev_xy_error_for_log = prev_xy_error_;
   Scalar r_xy = -(xy_error * xy_error);
   Scalar r_center = 0.0; // tag center - 이미지 중심 거리. 가까울수록 penalty 줄어듬 
   Scalar r_area = 0.0; // tag area 지수형 보상. target area에 가까울수록 1에 가까움
@@ -598,9 +627,11 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   Scalar r_area_small = 0.0; // tag_min_area 미만일 때만 적용되는 별도 패널티
   Scalar r_smooth = 0.0; // active tag 4개 코너의 연속 프레임 위치 변화량에 대한 패널티
   Scalar r_invisible = 0.0; // 태그가 보이지 않을 때 패널티. 보이지 않을수록 penalty 커짐
+  Scalar r_invisible_xy = 0.0;
+  Scalar r_visible_xy = 0.0;
   Scalar observed_area = -1.0; // active tag 면적(관측 불가 시 -1)
 
-  if (tag_visible && corners_visible) {
+  if (tag_visible2) {
     const Scalar cx = quad_obs_(active_base + quaddotenv::kCenterX); //tag center의 x 좌표
     const Scalar cy = quad_obs_(active_base + quaddotenv::kCenterY); //tag center의 y 좌표
     const Scalar ex = (cx - half_w) / std::max(half_w, eps); //tag center의 x 좌표가 이미지 중심에서 멀어질수록 ex의 절댓값이 커짐. half_w로 나누어서 정규화 (0~1 사이). eps는 0으로 나누는 것을 방지하기 위한 작은 값
@@ -691,7 +722,15 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     const Scalar e_axis_align = (a01 + a12 + a23 + a30) * Scalar(0.25);
     r_shape2 = -e_axis_align;
   }
-  if (!(tag_visible && corners_visible)) {
+  if (tag_visible &&
+      prev_xy_error_for_log >= Scalar(0.0) &&
+      xy_error > invisible_near_xy_threshold_) {
+    const Scalar xy_error_increase = xy_error - prev_xy_error_for_log;
+    if (xy_error_increase > Scalar(0.0)) {
+      r_visible_xy = -invisible_progress_coeff_ * xy_error_increase;
+    }
+  }
+  if (!tag_visible) {
     prev_corner_uv_valid_ = false;
     if (miss_count_ == 0) {
       // area on the last visible step before this invisible streak starts
@@ -699,26 +738,31 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     }
     const Scalar miss_steps = static_cast<Scalar>(miss_count_ + 1); //태그가 보이지 않는 상태가 몇 step 지속되었는지를 나타내는 값. miss_count_는 현재까지 태그가 보이지 않는 상태가 지속된 step 수를 카운트하는 변수. 여기에 1을 더하는 이유는 현재 step도 포함하기 위함. 태그가 보이지 않는 상태가 지속될수록 miss_steps의 값이 커지며, 이를 통해 r_invisible에 점점 더 큰 패널티를 주게 됨
     const Scalar stage_scale = static_cast<Scalar>(stage_); //현재 stage에 대한 스케일 값. stage_는 현재 stage를 나타내는 변수. 이 값을 사용하여 r_invisible에 stage에 따라 다른 패널티를 주게 됨
-    Scalar invisible_cost = (
-      invisible_base_penalty_ +
+    Scalar invisible_reward = -(
       invisible_miss_penalty_ * miss_steps +
       invisible_stage_penalty_ * stage_scale
     );
-    const Scalar area_threshold =
-      std::max(stage_target_area_[active_slot], Scalar(1.0));
-    if (miss_start_prev_area_ < area_threshold) {
-      invisible_cost += std::max(Scalar(0.0), invisible_base_penalty_extra_below_threshold_);
+    if (xy_error <= invisible_near_xy_threshold_) {
+      r_invisible_xy =
+        -invisible_near_penalty_coeff_ *
+        (invisible_near_xy_threshold_ - xy_error);
+      invisible_reward += r_invisible_xy;
+    } else if (prev_xy_error_for_log >= Scalar(0.0)) {
+      r_invisible_xy =
+        invisible_progress_coeff_ * (prev_xy_error_for_log - xy_error);
+      invisible_reward += r_invisible_xy;
     }
-    r_invisible = -invisible_cost;
+    r_invisible = invisible_reward;
   }
 
   // keep miss_count_ for invisible penalties
-  if (!corners_visible) {
+  if (!tag_visible) {
     miss_count_++;
   } else {
     miss_count_ = 0;
     miss_start_prev_area_ = -1.0;
   }
+  prev_xy_error_ = xy_error;
   Scalar r_switch = 0.0;
   bool stage_advanced = false;
   if (stage_switch_enabled_ && stage_ < (quaddotenv::kNumTags - 1)) { //현재 stage가 마지막 stage보다 작은 경우에만 다음 stage로 넘어갈 수 있는지 평가. 마지막 stage에서는 다음 stage가 없으므로, 다음 stage로 넘어갈 수 있는지 평가할 필요가 없음
@@ -756,7 +800,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   const Scalar area_reward_mode_threshold =
     std::max(stage_target_area_[active_slot], Scalar(1.0));
   if (!area_reward_mode_active_ &&
-      tag_visible && corners_visible &&
+      tag_visible2 &&
       observed_area >= area_reward_mode_threshold) {
     area_reward_mode_active_ = true;
   }
@@ -765,7 +809,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   const Scalar w_xy = area_align_only_mode ? Scalar(0.0) : landing_w_xy_;
   const Scalar w_vis = area_align_only_mode ? Scalar(0.0) : tag_vis_coeff_;
   const Scalar w_center = tag_center_coeff_;
-  const Scalar w_area = tag_area_coeff_;
+  const Scalar w_area = tag_visible ? tag_area_coeff_ : Scalar(0.0);
   const Scalar w_shape = area_align_only_mode ? Scalar(0.0) : tag_shape_coeff_;
   const Scalar w_shape2 = tag_shape2_coeff_;
   const Scalar w_area_small = area_align_only_mode ? Scalar(0.0) : tag_area_small_coeff_;
@@ -781,6 +825,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   const Scalar reward_shape2 = w_shape2 * r_shape2;
   const Scalar reward_area_small = w_area_small * r_area_small;
   const Scalar reward_smooth = w_smooth * r_smooth;
+  const Scalar reward_visible_xy = r_visible_xy;
 
   Scalar total_reward = 0.0;
   total_reward +=
@@ -792,6 +837,7 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
     reward_shape2 +
     reward_area_small +
     reward_smooth +
+    reward_visible_xy +
     r_invisible_term +
     r_switch_term;
 
@@ -807,11 +853,14 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   last_r_area_small_ = reward_area_small;
   last_r_smooth_ = reward_smooth;
   last_r_invisible_ = r_invisible_term;
+  last_r_invisible_xy_ = r_invisible_xy;
+  last_r_visible_xy_ = reward_visible_xy;
   last_r_switch_ = r_switch_term;
   last_observed_area_ = observed_area;
   last_tag_visible_ = tag_visible;
   last_corners_visible_ = corners_visible;
-  if (tag_visible && corners_visible && !stage_advanced) {
+  last_tag_visible2_ = tag_visible2;
+  if (tag_visible2 && !stage_advanced) {
     prev_corner_uv_ <<
       (quad_obs_(active_base + quaddotenv::kCorner0X) - half_w) / std::max(half_w, eps),
       (quad_obs_(active_base + quaddotenv::kCorner0Y) - half_h) / std::max(half_h, eps),
@@ -832,21 +881,29 @@ Scalar QuadrotorDotEnv::step(const Ref<Vector<>> act, Ref<Vector<>> obs) {
   const Scalar tilt_log = std::acos(cos_tilt_log);
 
   log_counter_++;
-  if (log_counter_ % std::max(1, log_interval_steps_) == 0) {
+  const bool should_log = enable_step_log_ &&
+    (log_counter_ % std::max(1, log_interval_steps_) == 0);
+  if (should_log) {
     logger_.info(
       "quad pos | x=%.3f y=%.3f z=%.3f yaw=%.4f tilt=%.4f",
       quad_state_.x(QS::POSX), quad_state_.x(QS::POSY), quad_state_.x(QS::POSZ),
       yaw_log, tilt_log);
     logger_.info(
-      "tag area | stage=%d active_tag=%d visible=%d corners=%d area=%.3f target=%.3f",
+      "tag area | stage=%d active_tag=%d visible=%d visible2=%d corners=%d area=%.3f target=%.3f",
       stage_, active_tag_idx, static_cast<int>(tag_visible),
+      static_cast<int>(tag_visible2),
       static_cast<int>(corners_visible), observed_area,
       std::max(stage_target_area_[active_slot], Scalar(1.0)));
     logger_.info(
-      "reward | total=%.4f xy=%.4f vis=%.4f center=%.4f area=%.4f shape=%.4f shape2=%.4f area_small=%.4f smooth=%.4f invisible=%.4f switch=%.4f",
+      "reward | total=%.4f xy=%.4f vis=%.4f center=%.4f area=%.4f shape=%.4f shape2=%.4f area_small=%.4f smooth=%.4f visible_xy=%.4f invisible=%.4f invisible_xy=%.4f switch=%.4f",
       total_reward, reward_xy, reward_vis, reward_center, reward_area,
       reward_shape, reward_shape2, reward_area_small, reward_smooth,
-      r_invisible_term, r_switch_term);
+      reward_visible_xy, r_invisible_term, r_invisible_xy,
+      r_switch_term);
+    logger_.info(
+      "info | current_xy=%.4f prev_xy=%.4f",
+      xy_error, prev_xy_error_for_log
+    );
   }
 
   return total_reward;
@@ -858,10 +915,9 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
     (quad_state_.x(QS::POSX) >= world_box_(0, 1)-0.001) ||
     (quad_state_.x(QS::POSY) <= world_box_(1, 0)+0.001) ||
     (quad_state_.x(QS::POSY) >= world_box_(1, 1)-0.001) ||
-    (quad_state_.x(QS::POSZ) <= world_box_(2, 0)+0.001) ||
     (quad_state_.x(QS::POSZ) >= world_box_(2, 1)-0.001);
   if (hit_world_box) {
-    if (log_counter_% std::max(1, log_interval_steps_) == 0) {
+    if (enable_step_log_ && log_counter_% std::max(1, log_interval_steps_) == 0) {
       logger_.warn(
         "terminate reason=world_box "
         "pos=(" + std::to_string(quad_state_.x(QS::POSX)) + ", " +
@@ -885,7 +941,7 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
       std::max(Scalar(-1.0), std::min(Scalar(1.0), R_WB(2, 2)));
     const Scalar tilt = std::acos(cos_tilt);
     if (tilt > landing_tilt_hard_) {
-      if (log_counter_% std::max(1, log_interval_steps_) == 0){
+      if (enable_step_log_ && log_counter_% std::max(1, log_interval_steps_) == 0){
         logger_.warn(
           "terminate reason=attitude_limit "
           "yaw=" + std::to_string(euler_zyx(0)) +
@@ -897,7 +953,8 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
   }
 
   // Ground plane is assumed around z=3.0.
-  if (quad_state_.x(QS::POSZ) <= landing_terminal_z_) {
+  if (landing_terminal_enabled_ &&
+      quad_state_.x(QS::POSZ) <= landing_terminal_z_) {
     const int terminal_tag_idx =
       stage_switch_enabled_ ? tag_order_[quaddotenv::kNumTags - 1] : 0;
     const Scalar xy_error =
@@ -916,7 +973,7 @@ bool QuadrotorDotEnv::isTerminalState(Scalar &reward) {
                          (vz < landing_success_vz_) &&
                          (tilt < landing_success_tilt_) &&
                          (body_rate < landing_success_body_rate_);
-    if (log_counter_% std::max(1, log_interval_steps_) == 0){
+    if (enable_step_log_ && log_counter_% std::max(1, log_interval_steps_) == 0){
       logger_.warn(
         std::string("terminate reason=landing_terminal ") +
         (success ? "result=success " : "result=failure ") +
@@ -1093,6 +1150,10 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["hold_last_tag_obs"]) {
       hold_last_tag_obs_ = cfg["rl"]["hold_last_tag_obs"].as<bool>();
     }
+    if (cfg["rl"]["use_projected_uv_out_of_view"]) {
+      use_projected_uv_out_of_view_ =
+        cfg["rl"]["use_projected_uv_out_of_view"].as<bool>();
+    }
     if (cfg["rl"]["stage_miss_threshold"]) {
       stage_miss_threshold_ = std::max(1, cfg["rl"]["stage_miss_threshold"].as<int>());
     }
@@ -1109,14 +1170,6 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
         stage_target_area_[i] = cfg["rl"]["stage_target_area"][i].as<Scalar>();
       }
     }
-    if (cfg["rl"]["invisible_base_penalty"]) {
-      invisible_base_penalty_ = std::max(Scalar(0.0),
-                                         cfg["rl"]["invisible_base_penalty"].as<Scalar>());
-    }
-    if (cfg["rl"]["invisible_base_penalty_extra_below_threshold"]) {
-      invisible_base_penalty_extra_below_threshold_ = std::max(
-        Scalar(0.0), cfg["rl"]["invisible_base_penalty_extra_below_threshold"].as<Scalar>());
-    }
     if (cfg["rl"]["invisible_miss_penalty"]) {
       invisible_miss_penalty_ = std::max(Scalar(0.0),
                                          cfg["rl"]["invisible_miss_penalty"].as<Scalar>());
@@ -1124,6 +1177,18 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     if (cfg["rl"]["invisible_stage_penalty"]) {
       invisible_stage_penalty_ = std::max(Scalar(0.0),
                                           cfg["rl"]["invisible_stage_penalty"].as<Scalar>());
+    }
+    if (cfg["rl"]["invisible_progress_coeff"]) {
+      invisible_progress_coeff_ =
+        cfg["rl"]["invisible_progress_coeff"].as<Scalar>();
+    }
+    if (cfg["rl"]["invisible_near_xy_threshold"]) {
+      invisible_near_xy_threshold_ = std::max(
+        Scalar(0.0), cfg["rl"]["invisible_near_xy_threshold"].as<Scalar>());
+    }
+    if (cfg["rl"]["invisible_near_penalty_coeff"]) {
+      invisible_near_penalty_coeff_ = std::max(
+        Scalar(0.0), cfg["rl"]["invisible_near_penalty_coeff"].as<Scalar>());
     }
 
     if (cfg["rl"]["landing_tilt_hard"]) {
@@ -1157,6 +1222,9 @@ bool QuadrotorDotEnv::loadParam(const YAML::Node &cfg) {
     }
     if (cfg["rl"]["log_interval_steps"]) {
       log_interval_steps_ = std::max(1, cfg["rl"]["log_interval_steps"].as<int>());
+    }
+    if (cfg["rl"]["enable_step_log"]) {
+      enable_step_log_ = cfg["rl"]["enable_step_log"].as<bool>();
     }
   } else {
     return false;

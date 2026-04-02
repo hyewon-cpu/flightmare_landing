@@ -51,7 +51,8 @@ enum Ctl : int {
   kImgHeight = 84,
   kImgChannels = 3,
   kNImg = kImgWidth * kImgHeight * kImgChannels,
-  kNObs = kTagObs + kNImg,
+  kNObs = kImg + kNImg,
+  kNDroneStateObs = 12,
   // control actions
   kAct = 0,
   kNAct = 4,
@@ -105,23 +106,29 @@ class QuadrotorPosEnv final : public EnvBase {
   Logger logger_{"QuadrotorPosEnv"};
 
   // Define reward for training
-  Scalar pos_coeff_, ori_coeff_, lin_vel_coeff_, ang_vel_coeff_, act_coeff_;
+  Scalar pos_coeff_{0.0};
+  Scalar ori_coeff_{0.0};
+  Scalar lin_vel_coeff_{0.0};
+  Scalar tag_pos_coeff_{0.0};
+  Scalar tag_lin_vel_coeff_{0.0};
+  Scalar ang_vel_coeff_{0.0};
+  Scalar act_coeff_{0.0};
+  Scalar survival_reward_{0.01};
 
   // observations and actions (for RL)
   Vector<quadposenv::kNObs> quad_obs_;
   Vector<quadposenv::kNAct> quad_act_;
+  Vector<quadposenv::kNAct> prev_quad_act_ = Vector<quadposenv::kNAct>::Zero();
+  bool prev_quad_act_valid_{false};
   std::shared_ptr<RGBCamera> rgb_camera_;
 
   // reward function design (for model-free reinforcement learning)
-  Vector<3> goal_pos_;
-  Vector<3> goal_ori_;
-  Vector<3> goal_lin_vel_;
-  Vector<3> goal_ang_vel_;
-  Scalar centering_w_xy_{1.0};
-  Scalar centering_xy_reward_scale_{0.2};
-  Scalar centering_w_z_{1.0};
-  Scalar centering_w_tilt_{0.0};
-  Scalar centering_survival_reward_{0.0};
+  Vector<3> goal_pos_{(Vector<3>() << 0.0, 0.0, 20.0).finished()};
+  Vector<3> goal_ori_{Vector<3>::Zero()};
+  Vector<3> goal_lin_vel_{Vector<3>::Zero()};
+  Vector<3> goal_tag_pos_{Vector<3>::Zero()};
+  Vector<3> goal_ang_vel_{Vector<3>::Zero()};
+  Vector<10> goal_tag_lin_vel_{Vector<10>::Zero()};
   Scalar landing_w_vel_xy_near_{0.5};
   Scalar landing_w_vel_xy_far_{0.2};
   Scalar landing_w_vel_z_near_{0.5};
@@ -135,7 +142,6 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar landing_tilt_hard_penalty_{2.0};
   Scalar landing_time_penalty_{0.01};
   Scalar landing_w_body_rate_{0.0};
-  Scalar centering_w_action_hover_{0.0};
   Scalar landing_w_rate_cmd_xy_{0.0};
   Scalar landing_w_duv_{0.0};
   Scalar landing_z_safe_margin_{2.0};
@@ -161,6 +167,7 @@ class QuadrotorPosEnv final : public EnvBase {
   Scalar log_sum_{0.0};
   int log_counter_{0};
   int log_interval_steps_{200};
+  bool enable_step_log_{true};
 
   // action and observation normalization (for learning)
   Vector<quadposenv::kNAct> act_mean_;
@@ -212,43 +219,24 @@ class QuadrotorPosEnv final : public EnvBase {
   int world_pose_log_counter_{0};
   Vector<3> estimated_p_C_{Vector<3>::Zero()};
   bool estimated_p_C_valid_{false};
+  Vector<10> prev_tag_coord_{Vector<10>::Zero()};
+  Vector<10> last_tag_lin_vel_{Vector<10>::Zero()};
+  bool prev_tag_coord_valid_{false};
 
-  // tag-based image-space reward
-  Scalar tag_vis_coeff_{1.0};
-  Scalar tag_center_coeff_{1.0};
-  Scalar tag_area_coeff_{1.0};
-  Scalar tag_shape_coeff_{1.0};
-  Scalar tag_shape2_coeff_{0.0};
-  Scalar tag_target_area_{500.0};
-  Scalar tag_area_error_scale_{3.0};
-  Scalar tag_shape_error_scale_{8.0};
-  Scalar tag_center_progress_coeff_{20.0};
-  Scalar tag_missing_penalty_{5.0};
-  Scalar tag_area_small_coeff_{1.0};
-  Scalar tag_smooth_coeff_{0.01};
-  Scalar tag_min_area_{30.0};
   Scalar last_total_reward_{0.0};
-  Scalar last_r_xy_{0.0};
-  Scalar last_r_z_{0.0};
-  Scalar last_r_vis_{0.0};
-  Scalar last_r_center_{0.0};
-  Scalar last_r_survival_{0.0};
   Scalar last_metric_area_{0.0};
-  Scalar last_metric_shape2_{0.0};
-  Scalar last_r_area_{0.0};
-  Scalar last_r_shape_{0.0};
-  Scalar last_r_shape2_{0.0};
-  Scalar last_r_area_small_{0.0};
-  Scalar last_r_smooth_{0.0};
-  Scalar last_r_invisible_{0.0};
-  Scalar last_r_switch_{0.0};
+  Scalar last_signed_shape_score_{0.0};
+  Scalar last_r_track_pos_{0.0};
+  Scalar last_r_track_ori_{0.0};
+  Scalar last_r_track_lin_vel_{0.0};
+  Scalar last_r_track_tag_pos_{0.0};
+  Scalar last_r_track_tag_lin_vel_{0.0};
+  Scalar last_r_track_ang_vel_{0.0};
+  Scalar last_r_track_act_{0.0};
+  Scalar last_r_track_survival_{0.0};
   Scalar last_observed_area_{-1.0};
-  Scalar last_r_center_progress_{0.0};
-  Scalar last_r_missing_tag_{0.0};
   bool last_tag_visible_{false};
   bool last_corners_visible_{false};
-  Scalar prev_center_error_{-1.0};
-  Scalar prev_xy_error_{-1.0};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;

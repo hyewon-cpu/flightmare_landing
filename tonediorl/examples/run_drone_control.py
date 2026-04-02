@@ -79,7 +79,7 @@ def parser():
     parser.add_argument('--seed', type=int, default=0,
                         help="Random seed")
     parser.add_argument('-w', '--weight', type=str, 
-    default='/home/flightmare_develop/tonediorl/examples/saved/hovering2/checkpoints/ppo_model_25000000_steps.zip',
+    default='/home/hyewon/projects/flightmare_develop/tonediorl/examples/saved/originhover/checkpoints/ppo_model_20000000_steps.zip',
                         help='trained weight path')
     
     # eval freq, model_save_freq 모두 timestep 기준

@@ -85,6 +85,9 @@ class QuadrotorDotEnv final : public EnvBase {
   // - auxiliar functions
   void updateExtraInfo() override;
   bool isTerminalState(Scalar &reward) override;
+  void setLandingTerminalEnabled(bool enabled) override {
+    landing_terminal_enabled_ = enabled;
+  }
   void addObjectsToUnity(std::shared_ptr<UnityBridge> bridge);
 
   friend std::ostream &operator<<(std::ostream &os,
@@ -145,6 +148,7 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar landing_xy_gate_{1.0};
   Scalar landing_w_early_descend_{0.5};
   Scalar landing_terminal_z_{0.02};
+  bool landing_terminal_enabled_{true};
   Scalar landing_success_xy_error_{0.5};
   Scalar landing_success_vz_{1.0};
   Scalar landing_success_tilt_{0.35};
@@ -155,6 +159,7 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar log_sum_{0.0};
   int log_counter_{0};
   int log_interval_steps_{200};
+  bool enable_step_log_{true};
 
   // action and observation normalization (for learning)
   Vector<quaddotenv::kNAct> act_mean_;
@@ -175,20 +180,24 @@ class QuadrotorDotEnv final : public EnvBase {
   std::array<Matrix<3, 4>, quaddotenv::kNumTags> tag_corner_world_;
   std::array<int, quaddotenv::kNumTags> tag_order_{{0, 1, 2}};
   std::array<bool, quaddotenv::kNumTags> curr_tag_visible_{{false, false, false}};
+  std::array<bool, quaddotenv::kNumTags> curr_tag_visible2_{{false, false, false}};
   int stage_{0};
   bool area_reward_mode_active_{false};
   int miss_count_{0};
   bool stage_switch_enabled_{true};
   bool hold_last_tag_obs_{false};
+  bool use_projected_uv_out_of_view_{false};
   int stage_miss_threshold_{4};
   bool stage_require_next_visible_{true};
   Scalar stage_switch_bonus_{2.0};
   std::array<Scalar, quaddotenv::kNumTags> stage_target_area_{{500.0, 350.0, 220.0}};
-  Scalar invisible_base_penalty_{0.5};
-  Scalar invisible_base_penalty_extra_below_threshold_{0.0};
   Scalar invisible_miss_penalty_{0.2};
   Scalar invisible_stage_penalty_{0.2};
+  Scalar invisible_progress_coeff_{0.0};
+  Scalar invisible_near_xy_threshold_{2.0};
+  Scalar invisible_near_penalty_coeff_{0.0};
   Scalar last_visible_area_{-1.0};
+  Scalar prev_xy_error_{-1.0};
   Scalar miss_start_prev_area_{-1.0};
   Vector<3> B_r_BC_{(Vector<3>() << 0.0, 0.0, 0.3).finished()};
   Matrix<3, 3> R_BC_{Matrix<3, 3>::Identity()};
@@ -226,10 +235,13 @@ class QuadrotorDotEnv final : public EnvBase {
   Scalar last_r_area_small_{0.0};
   Scalar last_r_smooth_{0.0};
   Scalar last_r_invisible_{0.0};
+  Scalar last_r_invisible_xy_{0.0};
+  Scalar last_r_visible_xy_{0.0};
   Scalar last_r_switch_{0.0};
   Scalar last_observed_area_{-1.0};
   bool last_tag_visible_{false};
   bool last_corners_visible_{false};
+  bool last_tag_visible2_{false};
 
   YAML::Node cfg_;
   Matrix<3, 2> world_box_;

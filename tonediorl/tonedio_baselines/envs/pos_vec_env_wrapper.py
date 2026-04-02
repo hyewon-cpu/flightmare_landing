@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from typing import List
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.running_mean_std import RunningMeanStd
@@ -26,16 +27,82 @@ class PosFlightEnvVec(VecEnv):
     IMG_CHANNELS = 3
     TAG_UV_DIM = 11
     TAG_POLICY_FEAT_DIM = 10
+    FIXED_TAG_NORM_DIM = 10
+    TAG_DIFF_FIXED_SCALE = 84.0
+    GOAL_POS_NORM_MEAN = np.array([5.5, 6.5, 40.0], dtype=np.float32)
+
+    @staticmethod
+    def _parse_nstep_lags(include_nstep_pos_obs) -> List[int]:
+        """
+        Parse n-step lag configuration.
+        Supported formats:
+          - int: 5
+          - str: "5,10" or "5 10"
+          - list/tuple/set: [5, 10]
+        Returns unique positive lags preserving input order.
+        """
+        lags = []
+        if include_nstep_pos_obs is None:
+            return lags
+        if isinstance(include_nstep_pos_obs, (int, np.integer)):
+            val = int(include_nstep_pos_obs)
+            return [val] if val > 0 else []
+        if isinstance(include_nstep_pos_obs, str):
+            tokens = include_nstep_pos_obs.replace(",", " ").split()
+            for tok in tokens:
+                try:
+                    val = int(tok)
+                except ValueError:
+                    continue
+                if val > 0:
+                    lags.append(val)
+        elif isinstance(include_nstep_pos_obs, (list, tuple, set)):
+            for item in include_nstep_pos_obs:
+                try:
+                    val = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if val > 0:
+                    lags.append(val)
+        else:
+            try:
+                val = int(include_nstep_pos_obs)
+            except (TypeError, ValueError):
+                val = 0
+            if val > 0:
+                lags.append(val)
+        unique_lags = []
+        seen = set()
+        for lag in lags:
+            if lag not in seen:
+                seen.add(lag)
+                unique_lags.append(lag)
+        return unique_lags
 
     def __init__(
         self,
         impl,
         use_obs_norm: bool = True,
+        include_tag_obs: bool = True,
+        include_tag_vel_obs: bool = False,
+        include_tag_diff_obs: bool = False,
         include_prev_action: int = 0,
+        include_prev_tag_obs: int = 0,
+        include_prev_pos_obs: int = 0,
+        include_nstep_pos_obs: int = 0,
         include_area_obs: bool = True,
         include_shape_obs: bool = True,
         include_tag_id_obs: bool = False,
         include_real_p_c_obs: bool = True,
+        include_imu_obs: bool = False,
+        include_drone_pos_obs: bool = False,
+        include_drone_z_obs: bool = False,
+        include_drone_pos_diff_obs: bool = False,
+        include_drone_ori_obs: bool = False,
+        include_drone_ori_diff_obs: bool = False,
+        include_drone_vel_obs: bool = False,
+        include_drone_ang_vel_obs: bool = False,
+        goal_center_pos_nstep_norm: bool = False,
     ):
         """
         :param impl: C++ VecEnv implementation (flightgym.QuadrotorEnv_v1)
@@ -44,11 +111,30 @@ class PosFlightEnvVec(VecEnv):
         """
         self.wrapper = impl
         self.use_obs_norm = use_obs_norm
+        self.include_tag_obs = bool(include_tag_obs)
+        self.include_tag_vel_obs = bool(include_tag_vel_obs)
+        self.include_tag_diff_obs = bool(include_tag_diff_obs)
         self.prev_action_history_len = max(0, int(include_prev_action))
+        self.prev_tag_obs_history_len = max(0, int(include_prev_tag_obs))
+        self.prev_pos_obs_history_len = max(0, int(include_prev_pos_obs))
+        self.nstep_pos_lags = self._parse_nstep_lags(include_nstep_pos_obs)
+        self.curr_nstep_pos_lag = max(self.nstep_pos_lags) if len(self.nstep_pos_lags) > 0 else 0
+        self.include_prev_tag_obs = self.prev_tag_obs_history_len > 0
+        self.include_prev_pos_obs = self.prev_pos_obs_history_len > 0
+        self.include_nstep_pos_obs = len(self.nstep_pos_lags) > 0
         self.include_area_obs = bool(include_area_obs)
         self.include_shape_obs = bool(include_shape_obs)
         self.include_tag_id_obs = bool(include_tag_id_obs)
         self.include_real_p_c_obs = bool(include_real_p_c_obs)
+        self.include_drone_pos_obs = bool(include_drone_pos_obs)
+        self.include_drone_z_obs = bool(include_drone_z_obs)
+        self.include_drone_pos_diff_obs = bool(include_drone_pos_diff_obs)
+        # Backward compatibility: include_imu_obs acts as orientation obs toggle alias.
+        self.include_drone_ori_obs = bool(include_drone_ori_obs) or bool(include_imu_obs)
+        self.include_drone_ori_diff_obs = bool(include_drone_ori_diff_obs)
+        self.include_drone_vel_obs = bool(include_drone_vel_obs)
+        self.include_drone_ang_vel_obs = bool(include_drone_ang_vel_obs)
+        self.goal_center_pos_nstep_norm = bool(goal_center_pos_nstep_norm)
 
         self.num_obs = int(self.wrapper.getObsDim())
         self.num_acts = int(self.wrapper.getActDim())
@@ -57,30 +143,90 @@ class PosFlightEnvVec(VecEnv):
         self._extraInfoNameToIdx = {name: i for i, name in enumerate(self._extraInfoNames)}
         self._reward_obs_indices = []
         self._pc_obs_indices = []
+        self._prev_pos_obs_indices = []
+        self._drone_pos_obs_indices = []
+        self._drone_z_obs_indices = []
+        self._drone_ori_obs_indices = []
+        self._drone_vel_obs_indices = []
+        self._drone_ang_vel_obs_indices = []
+        self._curr_nstep_pos_indices = []
         area_key = "metric_area" if "metric_area" in self._extraInfoNameToIdx else "reward_area"
         shape_key = "metric_shape2" if "metric_shape2" in self._extraInfoNameToIdx else "reward_shape2"
         if self.include_real_p_c_obs:
             for key in ("real_p_c_x", "real_p_c_y", "real_p_c_z"):
                 if key in self._extraInfoNameToIdx:
                     self._pc_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_prev_pos_obs:
+            for key in ("drone_pos_x", "drone_pos_y", "drone_pos_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._prev_pos_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_drone_pos_obs or self.include_drone_pos_diff_obs:
+            for key in ("drone_pos_x", "drone_pos_y", "drone_pos_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._drone_pos_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_nstep_pos_obs:
+            for key in ("drone_pos_x", "drone_pos_y", "drone_pos_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._curr_nstep_pos_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_drone_z_obs:
+            if "drone_pos_z" in self._extraInfoNameToIdx:
+                self._drone_z_obs_indices.append(self._extraInfoNameToIdx["drone_pos_z"])
+        if self.include_drone_ori_obs or self.include_drone_ori_diff_obs:
+            for key in ("imu_roll", "imu_pitch", "imu_yaw"):
+                if key in self._extraInfoNameToIdx:
+                    self._drone_ori_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_drone_vel_obs:
+            for key in ("drone_vel_x", "drone_vel_y", "drone_vel_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._drone_vel_obs_indices.append(self._extraInfoNameToIdx[key])
+        if self.include_drone_ang_vel_obs:
+            for key in ("drone_ang_vel_x", "drone_ang_vel_y", "drone_ang_vel_z"):
+                if key in self._extraInfoNameToIdx:
+                    self._drone_ang_vel_obs_indices.append(self._extraInfoNameToIdx[key])
         if self.include_area_obs and area_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[area_key])
         if self.include_shape_obs and shape_key in self._extraInfoNameToIdx:
             self._reward_obs_indices.append(self._extraInfoNameToIdx[shape_key])
         self._reward_obs_dim = len(self._reward_obs_indices)
         self._pc_obs_dim = len(self._pc_obs_indices)
+        self._prev_pos_obs_step_dim = len(self._prev_pos_obs_indices)
+        self._drone_pos_obs_dim = len(self._drone_pos_obs_indices)
+        self._drone_z_obs_dim = len(self._drone_z_obs_indices)
+        self._drone_pos_diff_obs_dim = (
+            len(self._drone_pos_obs_indices) if self.include_drone_pos_diff_obs else 0
+        )
+        self._drone_ori_obs_dim = len(self._drone_ori_obs_indices)
+        self._drone_ori_diff_obs_dim = (
+            len(self._drone_ori_obs_indices) if self.include_drone_ori_diff_obs else 0
+        )
+        self._drone_vel_obs_dim = len(self._drone_vel_obs_indices)
+        self._drone_ang_vel_obs_dim = len(self._drone_ang_vel_obs_indices)
+        self._curr_nstep_pos_single_dim = (
+            len(self._curr_nstep_pos_indices)
+            if (self.include_nstep_pos_obs and len(self._curr_nstep_pos_indices) == 3)
+            else 0
+        )
+        self._curr_nstep_pos_obs_dim = self._curr_nstep_pos_single_dim * len(self.nstep_pos_lags)
+        self._curr_nstep_pos_hist_len = (
+            (max(self.nstep_pos_lags) + 1) if self._curr_nstep_pos_obs_dim > 0 else 0
+        )
         self._image_dim = self.IMG_HEIGHT * self.IMG_WIDTH * self.IMG_CHANNELS
         self._tag_uv_dim = max(0, self.num_obs - self._image_dim)
         self._is_image_obs = self.num_obs == (
             self._image_dim
         )
+        self._tag_aux_dim = 0
         self._is_tag_image_obs = (
             self.num_obs > self._image_dim
             and self._tag_uv_dim >= self.TAG_UV_DIM
-            and self._tag_uv_dim % self.TAG_UV_DIM == 0
         )
         if self._is_tag_image_obs:
             self._num_tags = self._tag_uv_dim // self.TAG_UV_DIM
+            self._tag_aux_dim = self._tag_uv_dim - (self._num_tags * self.TAG_UV_DIM)
+            if self._num_tags < 1:
+                self._is_tag_image_obs = False
+                self._tag_aux_dim = 0
+        if self._is_tag_image_obs:
             # Policy uses only the first QR tag block.
             self._policy_num_tags = 1
             self._policy_tag_feat_dim = self.TAG_UV_DIM if self.include_tag_id_obs else self.TAG_POLICY_FEAT_DIM
@@ -90,8 +236,62 @@ class PosFlightEnvVec(VecEnv):
             self._policy_num_tags = 0
             self._policy_tag_feat_dim = self._tag_uv_dim
             self._policy_tag_uv_dim = self._tag_uv_dim
+        self._policy_tag_block_dim = (
+            (self._policy_tag_uv_dim + self._tag_aux_dim)
+            if (self._is_tag_image_obs and self.include_tag_obs)
+            else 0
+        )
+        self._tag_vel_obs_dim = (
+            self._policy_tag_block_dim
+            if (self._is_tag_image_obs and self.include_tag_obs and self.include_tag_vel_obs)
+            else 0
+        )
+        self._tag_diff_obs_dim = (
+            self._policy_tag_block_dim
+            if (self._is_tag_image_obs and self.include_tag_obs and self.include_tag_diff_obs)
+            else 0
+        )
+        self._prev_tag_obs_step_dim = (
+            self._policy_tag_block_dim
+            if (self._is_tag_image_obs and self.include_tag_obs)
+            else 0
+        )
+        self._prev_tag_obs_dim = self._prev_tag_obs_step_dim * self.prev_tag_obs_history_len
+        self._tag_diff_obs_start = -1
+        self._tag_diff_obs_end = -1
+        if self._tag_diff_obs_dim > 0:
+            # policy_obs layout (tag mode):
+            # [tag_block, prev_tag_hist, tag_vel, tag_diff, ...]
+            self._tag_diff_obs_start = (
+                self._policy_tag_block_dim
+                + self._prev_tag_obs_dim
+                + self._tag_vel_obs_dim
+            )
+            self._tag_diff_obs_end = self._tag_diff_obs_start + self._tag_diff_obs_dim
+        self._prev_pos_obs_dim = self._prev_pos_obs_step_dim * self.prev_pos_obs_history_len
+        # Legacy compatibility:
+        # Some older C++ builds may expose raw obs as pure 3D/12D drone state.
+        # For those modes, skip legacy fixed /83 scaling and use RMS only (if enabled).
+        self._is_drone_xyz_only_obs = (
+            (not self._is_image_obs)
+            and (not self._is_tag_image_obs)
+            and (self.num_obs == 3)
+        )
+        self._is_drone_state12_only_obs = (
+            (not self._is_image_obs)
+            and (not self._is_tag_image_obs)
+            and (self.num_obs == 12)
+        )
+        self._skip_fixed_tag_scaling = (
+            (not self.include_tag_obs)
+            or
+            self._is_drone_xyz_only_obs or self._is_drone_state12_only_obs
+        )
         self._append_prev_action = self.prev_action_history_len > 0 and (not self._is_image_obs)
         self._prev_action_obs_dim = self.prev_action_history_len * self.num_acts if self._append_prev_action else 0
+        self._goal_center_pos_nstep_norm = self.goal_center_pos_nstep_norm
+        self._goal_center_pos_indices = []
+        self._goal_center_nstep_index_groups = []
 
         if self._is_image_obs and use_obs_norm:
             print("[FlightEnvVecSB3] image observation detected, disabling observation normalization.")
@@ -106,14 +306,66 @@ class PosFlightEnvVec(VecEnv):
                 dtype=np.uint8,
             )
         elif self._is_tag_image_obs:
-            policy_dim = self._policy_tag_uv_dim + self._reward_obs_dim + self._pc_obs_dim + self._prev_action_obs_dim
+            policy_dim = (
+                self._policy_tag_block_dim
+                + self._tag_vel_obs_dim
+                + self._tag_diff_obs_dim
+                + self._prev_tag_obs_dim
+                + self._reward_obs_dim
+                + self._prev_action_obs_dim
+                + self._pc_obs_dim
+                + self._drone_pos_obs_dim
+                + self._drone_z_obs_dim
+                + self._drone_pos_diff_obs_dim
+                + self._prev_pos_obs_dim
+                + self._drone_ori_obs_dim
+                + self._drone_ori_diff_obs_dim
+                + self._drone_vel_obs_dim
+                + self._drone_ang_vel_obs_dim
+                + self._curr_nstep_pos_obs_dim
+            )
+            drone_pos_start = (
+                self._policy_tag_block_dim
+                + self._prev_tag_obs_dim
+                + self._tag_vel_obs_dim
+                + self._tag_diff_obs_dim
+                + self._reward_obs_dim
+                + self._prev_action_obs_dim
+                + self._pc_obs_dim
+            )
+            if self._drone_pos_obs_dim == 3:
+                self._goal_center_pos_indices = [drone_pos_start + 0, drone_pos_start + 1, drone_pos_start + 2]
+            if self._curr_nstep_pos_single_dim == 3 and len(self.nstep_pos_lags) > 0:
+                nstep_start = (
+                    drone_pos_start
+                    + self._drone_pos_obs_dim
+                    + self._drone_z_obs_dim
+                    + self._drone_pos_diff_obs_dim
+                    + self._prev_pos_obs_dim
+                    + self._drone_ori_obs_dim
+                    + self._drone_ori_diff_obs_dim
+                    + self._drone_vel_obs_dim
+                    + self._drone_ang_vel_obs_dim
+                )
+                self._goal_center_nstep_index_groups = [
+                    [nstep_start + i * 3 + 0, nstep_start + i * 3 + 1, nstep_start + i * 3 + 2]
+                    for i in range(len(self.nstep_pos_lags))
+                ]
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         else:
-            policy_dim = self.num_obs + self._prev_action_obs_dim
+            policy_dim = self.num_obs + self._prev_action_obs_dim + self._curr_nstep_pos_obs_dim
+            if self.num_obs >= 3:
+                self._goal_center_pos_indices = [0, 1, 2]
+            if self._curr_nstep_pos_single_dim == 3 and len(self.nstep_pos_lags) > 0:
+                nstep_start = self.num_obs + self._prev_action_obs_dim
+                self._goal_center_nstep_index_groups = [
+                    [nstep_start + i * 3 + 0, nstep_start + i * 3 + 1, nstep_start + i * 3 + 2]
+                    for i in range(len(self.nstep_pos_lags))
+                ]
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
@@ -136,8 +388,33 @@ class PosFlightEnvVec(VecEnv):
         self._prev_actions = np.zeros(
             (self._num_envs, self.prev_action_history_len, self.num_acts), dtype=np.float32
         )
+        self._prev_tag_obs = np.zeros(
+            (self._num_envs, self.prev_tag_obs_history_len, self._prev_tag_obs_step_dim), dtype=np.float32
+        )
+        self._last_tag_block = np.zeros((self._num_envs, self._policy_tag_block_dim), dtype=np.float32)
+        self._has_last_tag_block = np.zeros((self._num_envs,), dtype=bool)
+        self._prev_pos_obs = np.zeros(
+            (self._num_envs, self.prev_pos_obs_history_len, self._prev_pos_obs_step_dim), dtype=np.float32
+        )
+        self._curr_nstep_pos_hist = np.zeros(
+            (self._num_envs, self._curr_nstep_pos_hist_len, len(self._curr_nstep_pos_indices)), dtype=np.float32
+        )
+        self._last_drone_pos_obs = np.zeros((self._num_envs, self._drone_pos_obs_dim), dtype=np.float32)
+        self._has_last_drone_pos_obs = np.zeros((self._num_envs,), dtype=bool)
+        self._last_drone_ori_obs = np.zeros((self._num_envs, self._drone_ori_obs_dim), dtype=np.float32)
+        self._has_last_drone_ori_obs = np.zeros((self._num_envs,), dtype=bool)
 
         self._extraInfo = np.zeros((self._num_envs, len(self._extraInfoNames)), dtype=np.float32)
+        # Use simulator dt when available; otherwise use Flightmare's default sim_dt.
+        self._tag_vel_dt = 0.02
+        get_sim_dt_fn = getattr(self.wrapper, "getSimTimeStep", None)
+        if callable(get_sim_dt_fn):
+            try:
+                sim_dt = float(get_sim_dt_fn())
+                if sim_dt > 0.0:
+                    self._tag_vel_dt = sim_dt
+            except Exception:
+                pass
 
         # Episode bookkeeping (SB3 uses info["episode"] convention)
         self._ep_rewards = [[] for _ in range(self._num_envs)]
@@ -145,15 +422,35 @@ class PosFlightEnvVec(VecEnv):
         self.max_episode_steps = 300
 
         # Observation normalization
+        policy_obs_dim = int(self._observation_space.shape[0]) if len(self._observation_space.shape) > 0 else 0
         if self.use_obs_norm:
-            # Normalize only the observation features that are fed to policy.
-            if self._is_tag_image_obs:
-                rms_shape = (self._policy_tag_uv_dim,)
-            else:
-                rms_shape = (self.num_obs,)
+            self._fixed_tag_norm_dim = (
+                0
+                if self._skip_fixed_tag_scaling
+                else min(self.FIXED_TAG_NORM_DIM, policy_obs_dim)
+            )
+            rms_mask = np.ones(policy_obs_dim, dtype=bool)
+            if self._fixed_tag_norm_dim > 0:
+                rms_mask[:self._fixed_tag_norm_dim] = False
+            if self._tag_diff_obs_dim > 0 and self._tag_diff_obs_start >= 0:
+                rms_mask[self._tag_diff_obs_start:self._tag_diff_obs_end] = False
+            self._rms_indices = np.flatnonzero(rms_mask).astype(np.int64)
+            self._policy_to_rms = np.full((policy_obs_dim,), -1, dtype=np.int64)
+            self._policy_to_rms[self._rms_indices] = np.arange(self._rms_indices.shape[0], dtype=np.int64)
+            rms_shape = (int(self._rms_indices.shape[0]),)
             self.obs_rms = RunningMeanStd(shape=rms_shape)
             self.obs_rms_new = RunningMeanStd(shape=rms_shape)
         else:
+            self._fixed_tag_norm_dim = (
+                0
+                if self._skip_fixed_tag_scaling
+                else min(
+                    self.FIXED_TAG_NORM_DIM,
+                    policy_obs_dim,
+                )
+            )
+            self._rms_indices = np.zeros((0,), dtype=np.int64)
+            self._policy_to_rms = np.zeros((policy_obs_dim,), dtype=np.int64)
             self.obs_rms = None
             self.obs_rms_new = None
 
@@ -161,16 +458,57 @@ class PosFlightEnvVec(VecEnv):
             f"[FlightEnvVecSB3] num_envs={self._num_envs}, "
             f"raw_obs_dim={self.num_obs}, policy_obs_shape={self._observation_space.shape}, "
             f"tag_uv_dim={self._tag_uv_dim if self._is_tag_image_obs else 0}, "
+            f"tag_aux_dim={self._tag_aux_dim if self._is_tag_image_obs else 0}, "
             f"policy_tag_uv_dim={self._policy_tag_uv_dim if self._is_tag_image_obs else 0}, "
+            f"include_tag_obs={self.include_tag_obs}, "
+            f"include_tag_vel_obs={self.include_tag_vel_obs}, "
+            f"tag_vel_obs_dim={self._tag_vel_obs_dim if self._is_tag_image_obs else 0}, "
+            f"include_tag_diff_obs={self.include_tag_diff_obs}, "
+            f"tag_diff_obs_dim={self._tag_diff_obs_dim if self._is_tag_image_obs else 0}, "
+            f"prev_tag_obs_dim={self._prev_tag_obs_dim if self._is_tag_image_obs else 0}, "
+            f"prev_tag_obs_history_len={self.prev_tag_obs_history_len}, "
             f"reward_obs_dim={self._reward_obs_dim if self._is_tag_image_obs else 0}, "
+            f"prev_pos_obs_dim={self._prev_pos_obs_dim if self._is_tag_image_obs else 0}, "
+            f"prev_pos_obs_history_len={self.prev_pos_obs_history_len}, "
             f"pc_obs_dim={self._pc_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_pos_obs_dim={self._drone_pos_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_z_obs_dim={self._drone_z_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_pos_diff_obs_dim={self._drone_pos_diff_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_ori_obs_dim={self._drone_ori_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_ori_diff_obs_dim={self._drone_ori_diff_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_vel_obs_dim={self._drone_vel_obs_dim if self._is_tag_image_obs else 0}, "
+            f"drone_ang_vel_obs_dim={self._drone_ang_vel_obs_dim if self._is_tag_image_obs else 0}, "
+            f"curr_nstep_pos_obs_dim={self._curr_nstep_pos_obs_dim if (not self._is_image_obs) else 0}, "
             f"include_area_obs={self.include_area_obs}, "
             f"include_shape_obs={self.include_shape_obs}, "
             f"include_tag_id_obs={self.include_tag_id_obs}, "
             f"include_real_p_c_obs={self.include_real_p_c_obs}, "
+            f"include_prev_tag_obs={self.include_prev_tag_obs}, "
+            f"include_prev_pos_obs={self.include_prev_pos_obs}, "
+            f"include_drone_pos_obs={self.include_drone_pos_obs}, "
+            f"include_drone_z_obs={self.include_drone_z_obs}, "
+            f"include_drone_pos_diff_obs={self.include_drone_pos_diff_obs}, "
+            f"include_drone_ori_obs={self.include_drone_ori_obs}, "
+            f"include_drone_ori_diff_obs={self.include_drone_ori_diff_obs}, "
+            f"include_drone_vel_obs={self.include_drone_vel_obs}, "
+            f"include_drone_ang_vel_obs={self.include_drone_ang_vel_obs}, "
+            f"include_nstep_pos_obs={self.include_nstep_pos_obs}, "
+            f"nstep_pos_lags={self.nstep_pos_lags}, "
+            f"drone_xyz_only_obs={self._is_drone_xyz_only_obs}, "
+            f"drone_state12_only_obs={self._is_drone_state12_only_obs}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
             f"prev_action_history_len={self.prev_action_history_len}"
         )
+        if self.include_prev_tag_obs:
+            current_tag_mode = "fixed_/83_then_no_rms_for_first10" if self.include_tag_obs else "disabled"
+            prev_tag_mode = (
+                "fixed_/83_then_no_rms_for_first10" if (self.include_tag_obs and self._prev_tag_obs_dim > 0) else "disabled"
+            )
+            print(
+                f"[NormDebug] current_tag_mode={current_tag_mode}, "
+                f"prev_tag_mode={prev_tag_mode}, "
+                f"shared_scheme={str(current_tag_mode == prev_tag_mode)}"
+            )
 
     def seed(self, seed=0):
         self.wrapper.setSeed(seed)
@@ -215,14 +553,35 @@ class PosFlightEnvVec(VecEnv):
         self._reward[:] = 0.0
         self._done[:] = False
         self._prev_actions[:] = 0.0
+        if self._prev_tag_obs_dim > 0:
+            self._prev_tag_obs[:] = 0.0
+        if self._policy_tag_block_dim > 0:
+            self._last_tag_block[:] = 0.0
+            self._has_last_tag_block[:] = False
+        if self._prev_pos_obs_dim > 0:
+            self._prev_pos_obs[:] = 0.0
+        if self._curr_nstep_pos_obs_dim > 0:
+            self._curr_nstep_pos_hist[:] = 0.0
+        self._last_drone_pos_obs[:] = 0.0
+        self._has_last_drone_pos_obs[:] = False
+        self._last_drone_ori_obs[:] = 0.0
+        self._has_last_drone_ori_obs[:] = False
         self._extraInfo[:] = 0.0
         # Flightmare fills the provided obs buffer
         self.wrapper.reset(self._observation)
-        # Update normalization statistics (if enabled)
+        if self._policy_tag_block_dim > 0:
+            current_tag_block = self._extract_current_tag_block(self._observation)
+            self._last_tag_block[:, :] = current_tag_block
+            self._has_last_tag_block[:] = True
+        if self._curr_nstep_pos_obs_dim > 0:
+            curr_pos = self._extraInfo[:, self._curr_nstep_pos_indices].astype(np.float32)
+            self._curr_nstep_pos_hist[:, :, :] = curr_pos[:, None, :]
+        policy_obs = self._format_obs(self._observation)
         if self.use_obs_norm:
-            self.obs_rms_new.update(self._policy_base_obs(self._observation))
-        # Return normalized observation (or raw if normalization disabled)
-        return self._format_obs(self.normalize_obs(self._observation))
+            rms_tail = self._policy_rms_tail(policy_obs)
+            if rms_tail.shape[1] > 0:
+                self.obs_rms_new.update(rms_tail)
+        return self.normalize_obs(policy_obs)
 
     # def reset_and_update_info(self):
     #     return self.reset(), self._update_epi_info()
@@ -302,10 +661,6 @@ class PosFlightEnvVec(VecEnv):
         # C++ fills buffers in-place
         self.wrapper.step(self._actions, self._observation, self._reward, self._done, self._extraInfo)
 
-        # Update normalization statistics (if enabled)
-        if self.use_obs_norm:
-            self.obs_rms_new.update(self._policy_base_obs(self._observation))
-
         # infos: extra_info만 넣어줌 (episode는 VecMonitor가 처리)
         if len(self._extraInfoNames) > 0:
             infos = [
@@ -323,10 +678,55 @@ class PosFlightEnvVec(VecEnv):
             if np.any(self._done):
                 self._prev_actions[self._done] = 0.0
 
-        # Return normalized observation
-        obs = self._format_obs(self.normalize_obs(self._observation))
+        policy_obs = self._format_obs(self._observation)
+        if self.use_obs_norm:
+            rms_tail = self._policy_rms_tail(policy_obs)
+            if rms_tail.shape[1] > 0:
+                self.obs_rms_new.update(rms_tail)
+
+        obs = self.normalize_obs(policy_obs)
         rews = self._reward.copy()
         dones = self._done.copy()
+
+        if self._prev_tag_obs_dim > 0:
+            current_tag_block = self._extract_current_tag_block(self._observation)
+            self._prev_tag_obs[:, 1:, :] = self._prev_tag_obs[:, :-1, :]
+            self._prev_tag_obs[:, 0, :] = current_tag_block
+            if np.any(self._done):
+                self._prev_tag_obs[self._done] = 0.0
+        if self._policy_tag_block_dim > 0:
+            current_tag_block = self._extract_current_tag_block(self._observation)
+            self._last_tag_block[:, :] = current_tag_block
+            self._has_last_tag_block[:] = True
+            if np.any(self._done):
+                self._last_tag_block[self._done] = 0.0
+                self._has_last_tag_block[self._done] = False
+        if self._prev_pos_obs_dim > 0:
+            current_pos_block = self._extraInfo[:, self._prev_pos_obs_indices].astype(np.float32)
+            self._prev_pos_obs[:, 1:, :] = self._prev_pos_obs[:, :-1, :]
+            self._prev_pos_obs[:, 0, :] = current_pos_block
+            if np.any(self._done):
+                self._prev_pos_obs[self._done] = 0.0
+        if self._drone_pos_diff_obs_dim > 0:
+            current_drone_pos_obs = self._extraInfo[:, self._drone_pos_obs_indices].astype(np.float32)
+            self._last_drone_pos_obs[:, :] = current_drone_pos_obs
+            self._has_last_drone_pos_obs[:] = True
+            if np.any(self._done):
+                self._last_drone_pos_obs[self._done] = 0.0
+                self._has_last_drone_pos_obs[self._done] = False
+        if self._drone_ori_diff_obs_dim > 0:
+            current_drone_ori_obs = self._extraInfo[:, self._drone_ori_obs_indices].astype(np.float32)
+            self._last_drone_ori_obs[:, :] = current_drone_ori_obs
+            self._has_last_drone_ori_obs[:] = True
+            if np.any(self._done):
+                self._last_drone_ori_obs[self._done] = 0.0
+                self._has_last_drone_ori_obs[self._done] = False
+        if self._curr_nstep_pos_obs_dim > 0:
+            curr_pos = self._extraInfo[:, self._curr_nstep_pos_indices].astype(np.float32)
+            self._curr_nstep_pos_hist[:, 1:, :] = self._curr_nstep_pos_hist[:, :-1, :]
+            self._curr_nstep_pos_hist[:, 0, :] = curr_pos
+            if np.any(self._done):
+                self._curr_nstep_pos_hist[self._done] = curr_pos[self._done][:, None, :]
 
         self._actions = None
 
@@ -432,22 +832,64 @@ class PosFlightEnvVec(VecEnv):
             ).astype(np.uint8)
         if self._is_tag_image_obs:
             # `obs` may be raw C++ observation or already-extracted policy features.
-            if obs.ndim == 2 and obs.shape[1] == self._policy_tag_uv_dim: #policy_tag_uv_dim = policy 에 실제로 들어가는 태그 관측수 
+            base_policy_dim = self._policy_tag_block_dim
+            if obs.ndim == 2 and obs.shape[1] == base_policy_dim:
                 policy_obs = obs.astype(np.float32)
             else:
-                policy_obs = self._extract_policy_tag_obs(obs) #태그 부분만 분리 
+                if self.include_tag_obs:
+                    policy_obs = self._extract_policy_tag_obs(obs) #태그 부분만 분리
+                    if self._tag_aux_dim > 0:
+                        tag_aux_obs = self._extract_policy_tag_aux_obs(obs)
+                        policy_obs = np.concatenate([policy_obs, tag_aux_obs], axis=1).astype(np.float32)
+                else:
+                    policy_obs = np.zeros((obs.shape[0], 0), dtype=np.float32)
+            if self._prev_tag_obs_dim > 0:
+                policy_obs = np.concatenate([policy_obs, self._flatten_prev_tag_obs()], axis=1).astype(np.float32)
+            if self._tag_vel_obs_dim > 0:
+                policy_obs = np.concatenate([policy_obs, self._extract_tag_vel_obs(obs)], axis=1).astype(np.float32)
+            if self._tag_diff_obs_dim > 0:
+                policy_obs = np.concatenate([policy_obs, self._extract_tag_diff_obs(obs)], axis=1).astype(np.float32)
             if self._reward_obs_dim > 0: #reward_obs_dim : 태그 말고 더 붙일 obs 개수 
                 reward_obs = self._extraInfo[:, self._reward_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, reward_obs], axis=1).astype(np.float32)
+            if self._append_prev_action:
+                policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
             if self._pc_obs_dim > 0: #p_C 붙일거면 
                 pc_obs = self._extraInfo[:, self._pc_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, pc_obs], axis=1).astype(np.float32)
-            if self._append_prev_action:
-                policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
+            if self._drone_pos_obs_dim > 0:
+                drone_pos_obs = self._extraInfo[:, self._drone_pos_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, drone_pos_obs], axis=1).astype(np.float32)
+            if self._drone_z_obs_dim > 0:
+                drone_z_obs = self._extraInfo[:, self._drone_z_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, drone_z_obs], axis=1).astype(np.float32)
+            if self._drone_pos_diff_obs_dim > 0:
+                drone_pos_diff_obs = self._extract_drone_pos_diff_obs()
+                policy_obs = np.concatenate([policy_obs, drone_pos_diff_obs], axis=1).astype(np.float32)
+            if self._prev_pos_obs_dim > 0:
+                policy_obs = np.concatenate([policy_obs, self._flatten_prev_pos_obs()], axis=1).astype(np.float32)
+            if self._drone_ori_obs_dim > 0:
+                drone_ori_obs = self._extraInfo[:, self._drone_ori_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, drone_ori_obs], axis=1).astype(np.float32)
+            if self._drone_ori_diff_obs_dim > 0:
+                drone_ori_diff_obs = self._extract_drone_ori_diff_obs()
+                policy_obs = np.concatenate([policy_obs, drone_ori_diff_obs], axis=1).astype(np.float32)
+            if self._drone_vel_obs_dim > 0:
+                drone_vel_obs = self._extraInfo[:, self._drone_vel_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, drone_vel_obs], axis=1).astype(np.float32)
+            if self._drone_ang_vel_obs_dim > 0:
+                drone_ang_vel_obs = self._extraInfo[:, self._drone_ang_vel_obs_indices].astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, drone_ang_vel_obs], axis=1).astype(np.float32)
+            if self._curr_nstep_pos_obs_dim > 0:
+                curr_nstep_pos_obs = self._extract_curr_nstep_pos_obs()
+                policy_obs = np.concatenate([policy_obs, curr_nstep_pos_obs], axis=1).astype(np.float32)
             return policy_obs
         policy_obs = obs.astype(np.float32)
         if self._append_prev_action:
             policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
+        if self._curr_nstep_pos_obs_dim > 0:
+            curr_nstep_pos_obs = self._extract_curr_nstep_pos_obs()
+            policy_obs = np.concatenate([policy_obs, curr_nstep_pos_obs], axis=1).astype(np.float32)
         return policy_obs
 
     def _flatten_prev_actions(self) -> np.ndarray:
@@ -455,15 +897,90 @@ class PosFlightEnvVec(VecEnv):
             return np.zeros((self._num_envs, 0), dtype=np.float32)
         return self._prev_actions.reshape(self._num_envs, self._prev_action_obs_dim).astype(np.float32)
 
-    def _policy_base_obs(self, obs: np.ndarray) -> np.ndarray:
-        """
-        Extract policy observation features before optional previous-action append.
-        """
-        if self._is_image_obs:
-            return obs.astype(np.float32)
-        if self._is_tag_image_obs:
-            return self._extract_policy_tag_obs(obs)
-        return obs.astype(np.float32)
+    def _flatten_prev_tag_obs(self) -> np.ndarray:
+        if self._prev_tag_obs_dim <= 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        return self._prev_tag_obs.reshape(self._num_envs, self._prev_tag_obs_dim).astype(np.float32)
+
+    def _flatten_prev_pos_obs(self) -> np.ndarray:
+        if self._prev_pos_obs_dim <= 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        return self._prev_pos_obs.reshape(self._num_envs, self._prev_pos_obs_dim).astype(np.float32)
+
+    def _extract_curr_nstep_pos_obs(self) -> np.ndarray:
+        if self._curr_nstep_pos_obs_dim <= 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        # History buffer is updated after obs extraction in step(), so before update:
+        # hist[0] is t-1, hist[1] is t-2, ...
+        lag_blocks = []
+        for lag in self.nstep_pos_lags:
+            hist_idx = max(0, int(lag) - 1)
+            lag_blocks.append(self._curr_nstep_pos_hist[:, hist_idx, :].astype(np.float32))
+        if len(lag_blocks) == 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        return np.concatenate(lag_blocks, axis=1).astype(np.float32)
+
+    def _extract_tag_vel_obs(self, obs: np.ndarray) -> np.ndarray:
+        if self._tag_vel_obs_dim <= 0:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {obs.shape}")
+        current_tag_block = self._extract_current_tag_block(obs)
+        if self._policy_tag_block_dim <= 0:
+            return np.zeros((obs.shape[0], self._tag_vel_obs_dim), dtype=np.float32)
+        prev_tag_block = self._last_tag_block.astype(np.float32)
+        dt = float(self._tag_vel_dt) if self._tag_vel_dt > 0.0 else 0.02
+        tag_vel = ((current_tag_block - prev_tag_block) / dt).astype(np.float32)
+        if self._has_last_tag_block.shape[0] == obs.shape[0]:
+            tag_vel[~self._has_last_tag_block] = 0.0
+        return tag_vel
+
+    def _extract_tag_diff_obs(self, obs: np.ndarray) -> np.ndarray:
+        if self._tag_diff_obs_dim <= 0:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {obs.shape}")
+        current_tag_block = self._extract_current_tag_block(obs)
+        if self._policy_tag_block_dim <= 0:
+            return np.zeros((obs.shape[0], self._tag_diff_obs_dim), dtype=np.float32)
+        prev_tag_block = self._last_tag_block.astype(np.float32)
+        tag_diff = (current_tag_block - prev_tag_block).astype(np.float32)
+        if self._has_last_tag_block.shape[0] == obs.shape[0]:
+            tag_diff[~self._has_last_tag_block] = 0.0
+        return tag_diff
+
+    def _extract_drone_pos_diff_obs(self) -> np.ndarray:
+        if self._drone_pos_diff_obs_dim <= 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        if self._drone_pos_obs_dim <= 0:
+            return np.zeros((self._num_envs, self._drone_pos_diff_obs_dim), dtype=np.float32)
+        current_drone_pos_obs = self._extraInfo[:, self._drone_pos_obs_indices].astype(np.float32)
+        drone_pos_diff_obs = current_drone_pos_obs - self._last_drone_pos_obs
+        if self._has_last_drone_pos_obs.shape[0] == current_drone_pos_obs.shape[0]:
+            drone_pos_diff_obs[~self._has_last_drone_pos_obs] = 0.0
+        return drone_pos_diff_obs.astype(np.float32)
+
+    def _extract_drone_ori_diff_obs(self) -> np.ndarray:
+        if self._drone_ori_diff_obs_dim <= 0:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        if self._drone_ori_obs_dim <= 0:
+            return np.zeros((self._num_envs, self._drone_ori_diff_obs_dim), dtype=np.float32)
+        current_drone_ori_obs = self._extraInfo[:, self._drone_ori_obs_indices].astype(np.float32)
+        drone_ori_diff_obs = current_drone_ori_obs - self._last_drone_ori_obs
+        if self._has_last_drone_ori_obs.shape[0] == current_drone_ori_obs.shape[0]:
+            drone_ori_diff_obs[~self._has_last_drone_ori_obs] = 0.0
+        return drone_ori_diff_obs.astype(np.float32)
+
+    def _policy_rms_tail(self, obs: np.ndarray) -> np.ndarray:
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched policy obs with shape (n_envs, dim), got {obs.shape}")
+        if self._rms_indices.shape[0] == 0:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        if obs.shape[1] <= int(self._rms_indices.max()):
+            raise ValueError(
+                f"Policy obs dim too small for RMS indices: got {obs.shape[1]}, need > {int(self._rms_indices.max())}"
+            )
+        return obs[:, self._rms_indices].astype(np.float32)
 
     def _extract_policy_tag_obs(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -484,6 +1001,35 @@ class PosFlightEnvVec(VecEnv):
         return tag_obs.reshape(obs.shape[0], self._policy_tag_uv_dim).astype(np.float32)
 
 
+    def _extract_policy_tag_aux_obs(self, obs: np.ndarray) -> np.ndarray:
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {obs.shape}")
+        if self._tag_aux_dim <= 0:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        raw_tag_dim = self._num_tags * self.TAG_UV_DIM
+        aux_end = raw_tag_dim + self._tag_aux_dim
+        if obs.shape[1] < aux_end:
+            raise ValueError(
+                f"Obs dim too small for tag aux extraction: got {obs.shape[1]}, need at least {aux_end}"
+            )
+        return obs[:, raw_tag_dim:aux_end].astype(np.float32)
+
+    def _extract_current_tag_block(self, obs: np.ndarray) -> np.ndarray:
+        """
+        Extract the current-step tag block in the same representation used by policy.
+        Shape: (n_envs, _policy_tag_block_dim)
+        """
+        if self._policy_tag_block_dim <= 0:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {obs.shape}")
+        tag_obs = self._extract_policy_tag_obs(obs)
+        if self._tag_aux_dim > 0:
+            tag_aux_obs = self._extract_policy_tag_aux_obs(obs)
+            return np.concatenate([tag_obs, tag_aux_obs], axis=1).astype(np.float32)
+        return tag_obs.astype(np.float32)
+
+
     def normalize_obs(self, obs: np.ndarray) -> np.ndarray:
         """
         Normalize observations using this VecEnv's observation statistics.
@@ -494,16 +1040,66 @@ class PosFlightEnvVec(VecEnv):
         """
         if self._is_image_obs:
             return obs.astype(np.float32)
-        if self._is_tag_image_obs:
-            policy_obs = self._extract_policy_tag_obs(obs)
-            if not self.use_obs_norm:
-                return policy_obs
-            # Tag UV observations are image-plane pixel coordinates in [0, 83].
-            # Use fixed scaling for policy input normalization.
-            return (policy_obs / 83.0).astype(np.float32)
+        policy_obs = obs.astype(np.float32)
+        if policy_obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {policy_obs.shape}")
+        normalized = policy_obs.copy()
+        fixed_dim = 0 if self._skip_fixed_tag_scaling else min(self._fixed_tag_norm_dim, policy_obs.shape[1])
+        if fixed_dim > 0:
+            normalized[:, :fixed_dim] = normalized[:, :fixed_dim] / 83.0
+        # Keep tag-diff features on a simple fixed scale instead of RMS.
+        if self._tag_diff_obs_dim > 0 and self._tag_diff_obs_start >= 0:
+            diff_start = min(self._tag_diff_obs_start, policy_obs.shape[1])
+            diff_end = min(self._tag_diff_obs_end, policy_obs.shape[1])
+            if diff_end > diff_start:
+                normalized[:, diff_start:diff_end] = (
+                    policy_obs[:, diff_start:diff_end] / self.TAG_DIFF_FIXED_SCALE
+                ).astype(np.float32)
         if not self.use_obs_norm:
-            return obs.astype(np.float32)
-        return self._normalize_obs(obs, self.obs_rms).astype(np.float32)
+            return normalized.astype(np.float32)
+        if self.obs_rms is not None and self._rms_indices.shape[0] > 0:
+            normalized[:, self._rms_indices] = self._normalize_obs(
+                policy_obs[:, self._rms_indices], self.obs_rms
+            ).astype(np.float32)
+            # Optionally override position / n-step position normalization to use
+            # goal-centered mean with RMS std (shared from current position axes).
+            if self._goal_center_pos_nstep_norm and len(self._goal_center_pos_indices) == 3:
+                pos_std = np.ones((3,), dtype=np.float32)
+                for axis in range(3):
+                    src_idx = self._goal_center_pos_indices[axis]
+                    if 0 <= src_idx < self._policy_to_rms.shape[0]:
+                        rms_idx = int(self._policy_to_rms[src_idx])
+                        if rms_idx >= 0:
+                            pos_std[axis] = float(np.sqrt(self.obs_rms.var[rms_idx] + 1e-8))
+                goal = self.GOAL_POS_NORM_MEAN
+                for axis in range(3):
+                    pos_idx = self._goal_center_pos_indices[axis]
+                    if 0 <= pos_idx < policy_obs.shape[1]:
+                        normalized[:, pos_idx] = (
+                            (policy_obs[:, pos_idx] - goal[axis]) / pos_std[axis]
+                        ).astype(np.float32)
+                for nstep_group in self._goal_center_nstep_index_groups:
+                    if len(nstep_group) != 3:
+                        continue
+                    for axis in range(3):
+                        nstep_idx = nstep_group[axis]
+                        if 0 <= nstep_idx < policy_obs.shape[1]:
+                            normalized[:, nstep_idx] = (
+                                (policy_obs[:, nstep_idx] - goal[axis]) / pos_std[axis]
+                            ).astype(np.float32)
+
+        # Apply the same fixed /83 scaling rule to previous-tag block as current tag:
+        # first 10 tag coords are fixed-scaled and excluded from effective RMS output.
+        if self._prev_tag_obs_dim > 0:
+            prev_tag_start = self._policy_tag_block_dim
+            prev_tag_fixed_dim = min(self.FIXED_TAG_NORM_DIM, self._prev_tag_obs_step_dim)
+            for hist_idx in range(self.prev_tag_obs_history_len):
+                block_start = prev_tag_start + hist_idx * self._prev_tag_obs_step_dim
+                if prev_tag_fixed_dim > 0:
+                    normalized[:, block_start:block_start + prev_tag_fixed_dim] = (
+                        policy_obs[:, block_start:block_start + prev_tag_fixed_dim] / 83.0
+                    ).astype(np.float32)
+        return normalized.astype(np.float32)
 
     def update_rms(self):
         """

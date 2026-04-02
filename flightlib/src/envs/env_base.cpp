@@ -19,4 +19,8 @@ bool EnvBase::isTerminalState(Scalar &reward) {
   return false;
 }
 
+void EnvBase::setLandingTerminalEnabled(bool enabled) {
+  (void)enabled;
+}
+
 }  // namespace flightlib

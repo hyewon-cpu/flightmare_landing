@@ -34,6 +34,7 @@ class EnvBase {
   virtual void render();
   virtual void updateExtraInfo();
   virtual bool isTerminalState(Scalar &reward);
+  virtual void setLandingTerminalEnabled(bool enabled);
 
   // auxilirary functions
   inline void setSeed(const int seed) { std::srand(seed); };

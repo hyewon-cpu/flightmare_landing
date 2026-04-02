@@ -208,18 +208,17 @@ bool QuadrotorVisEnv::reset(Ref<Vector<>> obs, const bool random) {
     }
     // reset orientation
     if (randomize_attitude_on_reset_) {
-      quad_state_.x(QS::ATTW) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTX) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTY) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      quad_state_.x(QS::ATTZ) = uniform_dist_(random_gen_) * randomize_attitude_scale_;
-      if (quad_state_.qx.norm() > 1e-9) {
-        quad_state_.qx /= quad_state_.qx.norm();
-      } else {
-        quad_state_.x(QS::ATTW) = 1.0;
-        quad_state_.x(QS::ATTX) = 0.0;
-        quad_state_.x(QS::ATTY) = 0.0;
-        quad_state_.x(QS::ATTZ) = 0.0;
-      }
+      const Scalar yaw =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar pitch =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Scalar roll =
+        uniform_dist_(random_gen_) * randomize_attitude_scale_;
+      const Quaternion q_delta(
+        Eigen::AngleAxis<Scalar>(yaw, Vector<3>::UnitZ()) *
+        Eigen::AngleAxis<Scalar>(pitch, Vector<3>::UnitY()) *
+        Eigen::AngleAxis<Scalar>(roll, Vector<3>::UnitX()));
+      quad_state_.q(q_delta.normalized());
     }
   }
   // reset quadrotor with random states

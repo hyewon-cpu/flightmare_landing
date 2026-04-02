@@ -7,6 +7,7 @@ import io
 import math
 import argparse
 import copy
+import glob
 import numpy as np
 import torch
 import cv2
@@ -18,6 +19,26 @@ _THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 _PROJECT_ROOT = os.path.dirname(_THIS_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+
+def _prefer_local_flightgym():
+    root = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    patterns = [
+        os.path.join(root, "flightlib", "build_local", "flightgym*.so"),
+        os.path.join(root, "flightlib", "build_cpp", "flightgym*.so"),
+        os.path.join(root, "flightlib", "build", "flightgym*.so"),
+    ]
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            module_dir = os.path.dirname(matches[-1])
+            if module_dir not in sys.path:
+                sys.path.insert(0, module_dir)
+            return matches[-1]
+    return None
+
+
+_LOCAL_FLIGHTGYM_SO = _prefer_local_flightgym()
 #
 # from stable_baselines import logger
 
@@ -44,8 +65,6 @@ from wandb.integration.sb3 import WandbCallback
 
 """
 python run_pos_drone_control.py --train 1 --use_obs_norm 1 --render 0 --wandb_run_name "test_run_1"
-
-
 """
 
 
@@ -84,24 +103,32 @@ def parser():
                         help='trained weight path name')
     parser.add_argument('-m', '--model_type', type=str, default="final",
                         help='model type to use for testing (best, final, custom)')
+    parser.add_argument('-c', '--custompath', dest='custompath', type=str, default=None,
+                        help='custom path for testing. If specified, overrides --weight and --model_type')
     
     # eval freq, model_save_freq 모두 timestep 기준
     parser.add_argument('--total_timesteps', type=int, default=25_000_000,
                    help="Total training timesteps")
-    parser.add_argument('--eval_freq', type=int, default=1000,
+    parser.add_argument('--eval_freq', type=int, default=10000,
                    help="Eval frequency (timesteps per env)")
     parser.add_argument('--n_eval_episodes', type=int, default=5,
                    help="Number of eval episodes")
-    parser.add_argument('--checkpoint_freq', type=int, default=5_000_000, 
+    parser.add_argument('--checkpoint_freq', type=int, default=50000, 
                    help="Checkpoint save frequency in total timesteps. Default is 50,000.")
 
     # wandb
     parser.add_argument('--wandb', type=int, default=1, help="Enable wandb logging")
-    parser.add_argument('--wandb_project', type=str, default='flightmare_centering', help="wandb project name")
+    parser.add_argument('--wandb_project', type=str, default='flightmare_test_hovering', help="wandb project name")
     parser.add_argument('--wandb_run_name', type=str, default=None, help="wandb run name")
     parser.add_argument('--wandb_episode_log_freq', type=int, default=10,
                         help="Log episode metrics to wandb every N episodes")
-    parser.add_argument('--use_obs_norm', type=int, default=0, help="Use observation normalization (1=True, 0=False)")
+    parser.add_argument('--wandb_extra_info', type=int, default=1,
+                        help="Log per-step info['extra_info'] episode aggregates to wandb (1=True, 0=False). "
+                             "Disable for faster training.")
+    parser.add_argument('--rollout_reward_breakdown', type=int, default=0,
+                        help="Log rollout/reward_*_mean metrics (1=True, 0=False). "
+                             "Disable for faster training.")
+    parser.add_argument('--use_obs_norm', type=int, default=1, help="Use observation normalization (1=True, 0=False)")
     parser.add_argument('--rms_path', type=str, default=None, 
                         help="Path to normalization statistics (.npz file) for testing. "
                              "If None, will try to find RMS file from checkpoint directory.")
@@ -157,30 +184,74 @@ def get_obs_wrapper_config():
         quad_cfg = yaml.load(f)
     rl_cfg = quad_cfg.get("rl", {})
     return {
+        "include_tag_obs": bool(rl_cfg.get("include_tag_obs", True)),
+        "include_tag_vel_obs": bool(rl_cfg.get("include_tag_vel_obs", False)),
+        "include_tag_diff_obs": bool(rl_cfg.get("include_tag_diff_obs", False)),
         "include_prev_action": max(0, int(rl_cfg.get("include_prev_action", 0))),
+        "include_nstep_pos_obs": rl_cfg.get("include_nstep_pos_obs", 0),
+        "goal_center_pos_nstep_norm": bool(rl_cfg.get("goal_center_pos_nstep_norm", False)),
+        "include_prev_tag_obs": max(0, int(rl_cfg.get("include_prev_tag_obs", 0))),
+        "include_prev_pos_obs": max(0, int(rl_cfg.get("include_prev_pos_obs", 0))),
         "include_area_obs": bool(rl_cfg.get("include_area_obs", True)),
         "include_shape_obs": bool(rl_cfg.get("include_shape_obs", True)),
         "include_tag_id_obs": bool(rl_cfg.get("include_tag_id_obs", False)),
         "include_real_p_c_obs": bool(rl_cfg.get("include_real_p_c_obs", True)),
+        "include_drone_pos_obs": bool(rl_cfg.get("include_drone_pos_obs", False)),
+        "include_drone_z_obs": bool(rl_cfg.get("include_drone_z_obs", False)),
+        "include_drone_pos_diff_obs": bool(rl_cfg.get("include_drone_pos_diff_obs", False)),
+        "include_drone_ori_obs": bool(
+            rl_cfg.get("include_drone_ori_obs", rl_cfg.get("include_imu_obs", False))
+        ),
+        "include_drone_ori_diff_obs": bool(rl_cfg.get("include_drone_ori_diff_obs", False)),
+        "include_drone_vel_obs": bool(rl_cfg.get("include_drone_vel_obs", False)),
+        "include_drone_ang_vel_obs": bool(rl_cfg.get("include_drone_ang_vel_obs", False)),
     }
 
 def build_env(
     cfg_yaml_str,
     use_obs_norm=True,
+    include_tag_obs=True,
+    include_tag_vel_obs=False,
+    include_tag_diff_obs=False,
     include_prev_action=0,
+    include_nstep_pos_obs=0,
+    goal_center_pos_nstep_norm=False,
+    include_prev_tag_obs=0,
+    include_prev_pos_obs=0,
     include_area_obs=True,
     include_shape_obs=True,
     include_tag_id_obs=False,
     include_real_p_c_obs=True,
+    include_drone_pos_obs=False,
+    include_drone_z_obs=False,
+    include_drone_pos_diff_obs=False,
+    include_drone_ori_obs=False,
+    include_drone_ori_diff_obs=False,
+    include_drone_vel_obs=False,
+    include_drone_ang_vel_obs=False,
 ):
     env = wrapper.PosFlightEnvVec(   
         QuadrotorPosEnv_v1(cfg_yaml_str, False),
         use_obs_norm=use_obs_norm,
+        include_tag_obs=bool(include_tag_obs),
+        include_tag_vel_obs=bool(include_tag_vel_obs),
+        include_tag_diff_obs=bool(include_tag_diff_obs),
         include_prev_action=int(include_prev_action),
+        include_nstep_pos_obs=include_nstep_pos_obs,
+        goal_center_pos_nstep_norm=bool(goal_center_pos_nstep_norm),
+        include_prev_tag_obs=int(include_prev_tag_obs),
+        include_prev_pos_obs=int(include_prev_pos_obs),
         include_area_obs=bool(include_area_obs),
         include_shape_obs=bool(include_shape_obs),
         include_tag_id_obs=bool(include_tag_id_obs),
         include_real_p_c_obs=bool(include_real_p_c_obs),
+        include_drone_pos_obs=bool(include_drone_pos_obs),
+        include_drone_z_obs=bool(include_drone_z_obs),
+        include_drone_pos_diff_obs=bool(include_drone_pos_diff_obs),
+        include_drone_ori_obs=bool(include_drone_ori_obs),
+        include_drone_ori_diff_obs=bool(include_drone_ori_diff_obs),
+        include_drone_vel_obs=bool(include_drone_vel_obs),
+        include_drone_ang_vel_obs=bool(include_drone_ang_vel_obs),
     )
     env = VecMonitor(env)  # SB3 전용 래퍼. 에피소드 통계를 자동 기록. episode 끝날때  info 에 길이/리턴 같은 통계를 넣음. 이걸 Tensorboard 에서 집계함 
     # VecMonitor는 episode가 끝날 때마다 정보 업데이트. 
@@ -443,6 +514,48 @@ class WandbExtraInfoCallback(BaseCallback):
         return True
 
 
+class RolloutRewardBreakdownCallback(BaseCallback):
+    """
+    Log per-reward-component mean values at PPO rollout boundaries.
+    Keys are read from info["extra_info"] entries that start with "reward_".
+    """
+
+    def __init__(self, verbose: int = 0):
+        super().__init__(verbose=verbose)
+        self._sum_by_key = {}
+        self._count_by_key = {}
+
+    def _on_rollout_start(self) -> None:
+        self._sum_by_key = {}
+        self._count_by_key = {}
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", None)
+        if not infos:
+            return True
+
+        for info in infos:
+            if not isinstance(info, dict):
+                continue
+            extra = info.get("extra_info", None)
+            if not isinstance(extra, dict):
+                continue
+            for k, v in extra.items():
+                key = str(k)
+                if not key.startswith("reward_"):
+                    continue
+                self._sum_by_key[key] = self._sum_by_key.get(key, 0.0) + float(v)
+                self._count_by_key[key] = self._count_by_key.get(key, 0) + 1
+        return True
+
+    def _on_rollout_end(self) -> None:
+        for key, total in self._sum_by_key.items():
+            count = self._count_by_key.get(key, 0)
+            if count <= 0:
+                continue
+            self.logger.record(f"rollout/{key}_mean", float(total) / float(count))
+
+
 class MeanRewardPerStepEvalCallback(EvalCallback):
     """
     Eval callback that saves best model using mean(reward / episode_length) as criterion.
@@ -551,6 +664,13 @@ class MeanRewardPerStepEvalCallback(EvalCallback):
 def main():
     args = parser().parse_args()
     print(f"[Debug] running script: {os.path.realpath(__file__)}")
+    try:
+        import flightgym
+        print(f"[Runtime] flightgym module: {flightgym.__file__}")
+    except Exception:
+        pass
+    if _LOCAL_FLIGHTGYM_SO is not None:
+        print(f"[Runtime] preferred local flightgym candidate: {_LOCAL_FLIGHTGYM_SO}")
     ensure_flightmare_path()
     apply_init_pos_override(args.init_pos)
     yaml = YAML()  # 기본 typ='rt' (RoundTrip)
@@ -588,24 +708,54 @@ def main():
     # main env
     use_obs_norm = bool(args.use_obs_norm)
     obs_wrapper_cfg = get_obs_wrapper_config()
+    include_tag_obs = obs_wrapper_cfg["include_tag_obs"]
+    include_tag_vel_obs = obs_wrapper_cfg["include_tag_vel_obs"]
+    include_tag_diff_obs = obs_wrapper_cfg["include_tag_diff_obs"]
     include_prev_action = obs_wrapper_cfg["include_prev_action"]
+    include_nstep_pos_obs = obs_wrapper_cfg["include_nstep_pos_obs"]
+    goal_center_pos_nstep_norm = obs_wrapper_cfg["goal_center_pos_nstep_norm"]
+    include_prev_tag_obs = obs_wrapper_cfg["include_prev_tag_obs"]
+    include_prev_pos_obs = obs_wrapper_cfg["include_prev_pos_obs"]
     include_area_obs = obs_wrapper_cfg["include_area_obs"]
     include_shape_obs = obs_wrapper_cfg["include_shape_obs"]
     include_tag_id_obs = obs_wrapper_cfg["include_tag_id_obs"]
     include_real_p_c_obs = obs_wrapper_cfg["include_real_p_c_obs"]
+    include_drone_pos_obs = obs_wrapper_cfg["include_drone_pos_obs"]
+    include_drone_z_obs = obs_wrapper_cfg["include_drone_z_obs"]
+    include_drone_pos_diff_obs = obs_wrapper_cfg["include_drone_pos_diff_obs"]
+    include_drone_ori_obs = obs_wrapper_cfg["include_drone_ori_obs"]
+    include_drone_ori_diff_obs = obs_wrapper_cfg["include_drone_ori_diff_obs"]
+    include_drone_vel_obs = obs_wrapper_cfg["include_drone_vel_obs"]
+    include_drone_ang_vel_obs = obs_wrapper_cfg["include_drone_ang_vel_obs"]
     print(
-        f"[Config] include_prev_action={include_prev_action}, include_area_obs={include_area_obs}, "
+        f"[Config] include_tag_obs={include_tag_obs}, include_tag_vel_obs={include_tag_vel_obs}, include_tag_diff_obs={include_tag_diff_obs}, include_prev_action={include_prev_action}, include_nstep_pos_obs={include_nstep_pos_obs}, goal_center_pos_nstep_norm={goal_center_pos_nstep_norm}, include_prev_tag_obs={include_prev_tag_obs}, include_prev_pos_obs={include_prev_pos_obs}, include_area_obs={include_area_obs}, "
         f"include_shape_obs={include_shape_obs}, include_tag_id_obs={include_tag_id_obs}, "
-        f"include_real_p_c_obs={include_real_p_c_obs}"
+        f"include_real_p_c_obs={include_real_p_c_obs}, include_drone_pos_obs={include_drone_pos_obs}, include_drone_z_obs={include_drone_z_obs}, include_drone_pos_diff_obs={include_drone_pos_diff_obs}, "
+        f"include_drone_ori_obs={include_drone_ori_obs}, include_drone_ori_diff_obs={include_drone_ori_diff_obs}, include_drone_vel_obs={include_drone_vel_obs}, "
+        f"include_drone_ang_vel_obs={include_drone_ang_vel_obs}"
     )
     env = build_env(
         cfg_yaml_str,
         use_obs_norm=use_obs_norm,
+        include_tag_obs=include_tag_obs,
+        include_tag_vel_obs=include_tag_vel_obs,
+        include_tag_diff_obs=include_tag_diff_obs,
         include_prev_action=include_prev_action,
+        include_nstep_pos_obs=include_nstep_pos_obs,
+        goal_center_pos_nstep_norm=goal_center_pos_nstep_norm,
+        include_prev_tag_obs=include_prev_tag_obs,
+        include_prev_pos_obs=include_prev_pos_obs,
         include_area_obs=include_area_obs,
         include_shape_obs=include_shape_obs,
         include_tag_id_obs=include_tag_id_obs,
         include_real_p_c_obs=include_real_p_c_obs,
+        include_drone_pos_obs=include_drone_pos_obs,
+        include_drone_z_obs=include_drone_z_obs,
+        include_drone_pos_diff_obs=include_drone_pos_diff_obs,
+        include_drone_ori_obs=include_drone_ori_obs,
+        include_drone_ori_diff_obs=include_drone_ori_diff_obs,
+        include_drone_vel_obs=include_drone_vel_obs,
+        include_drone_ang_vel_obs=include_drone_ang_vel_obs,
     )
     unity_connected = False
     if need_unity_camera:
@@ -632,7 +782,7 @@ def main():
         saver = U.ConfigurationSaver(log_dir=log_dir, run_name=args.wandb_run_name)
 
         n_envs = env.num_envs
-        n_steps = 250
+        n_steps = 250  
         batch_size = n_steps * n_envs  # emulate nminibatches=1
         checkpoint_freq_total = max(1, int(args.checkpoint_freq))
         checkpoint_freq_calls = max(1, checkpoint_freq_total // max(1, int(n_envs)))
@@ -647,18 +797,34 @@ def main():
             "total_timesteps": args.total_timesteps,
             "use_obs_norm": use_obs_norm,
             "include_prev_action": include_prev_action,
+            "include_nstep_pos_obs": include_nstep_pos_obs,
+            "goal_center_pos_nstep_norm": goal_center_pos_nstep_norm,
+            "include_prev_tag_obs": include_prev_tag_obs,
+            "include_prev_pos_obs": include_prev_pos_obs,
+            "include_tag_obs": include_tag_obs,
+            "include_tag_vel_obs": include_tag_vel_obs,
+            "include_tag_diff_obs": include_tag_diff_obs,
             "include_area_obs": include_area_obs,
             "include_shape_obs": include_shape_obs,
             "include_tag_id_obs": include_tag_id_obs,
             "include_real_p_c_obs": include_real_p_c_obs,
-            "centering_w_xy" : cfg2["rl"].get("centering_w_xy", "not defined"),
-            "centering_xy_reward_scale" : cfg2["rl"].get("centering_xy_reward_scale", "not defined"),
-            "centering_w_z" : cfg2["rl"].get("centering_w_z", "not defined"),
-            "centering_survival_reward" : cfg2["rl"].get("centering_survival_reward", "not defined"),
-            "centering_w_action_hover" : cfg2["rl"].get("centering_w_action_hover", "not defined"),
-            "centering_w_tilt" : cfg2["rl"].get("centering_w_tilt", "not defined"),
-            "include_real_p_c_obs" :cfg2["rl"].get("include_real_p_c_obs", "not defined"),
-            "use_projected_uv_out_of_view" : cfg2["rl"].get("use_projected_uv_out_of_view", "not defined"),
+            "include_drone_pos_obs": include_drone_pos_obs,
+            "include_drone_z_obs": include_drone_z_obs,
+            "include_drone_pos_diff_obs": include_drone_pos_diff_obs,
+            "include_drone_ori_obs": include_drone_ori_obs,
+            "include_drone_ori_diff_obs": include_drone_ori_diff_obs,
+            "include_drone_vel_obs": include_drone_vel_obs,
+            "include_drone_ang_vel_obs": include_drone_ang_vel_obs,
+    
+            "pos_coeff" : cfg2["rl"].get("pos_coeff", "not defined"),
+            "ori_coeff" : cfg2["rl"].get("ori_coeff", "not defined"),
+            "lin_vel_coeff" : cfg2["rl"].get("lin_vel_coeff", "not defined"),
+            "tag_lin_vel_coeff" : cfg2["rl"].get("tag_lin_vel_coeff", "not defined"),
+            "tag_pos_coeff" : cfg2["rl"].get("tag_pos_coeff", "not defined"),
+            "ang_vel_coeff" : cfg2["rl"].get("ang_vel_coeff", "not defined"),
+            "act_coeff" : cfg2["rl"].get("act_coeff", "not defined"),
+            "survival_reward" : cfg2["rl"].get("survival_reward", "not defined"),
+            
             
             "algo" : "PPO",
             "seed" : args.seed,
@@ -669,11 +835,15 @@ def main():
             "n_epochs" : 10,
             "clip_range" : 0.2,
             "learning_rate" : 3e-4,
-            "ent_coef" : 0.01,
+            "ent_coef" : 0.0,
             "vf_coef" : 0.5,
             "max_grad_norm" : 0.5,
             "num_envs" : n_envs,
             "use_sde" : False,
+            "policy_kwargs": dict(
+                activation_fn=torch.nn.ReLU,
+                net_arch=[dict(pi=[256,256], vf=[512, 512])],
+                log_std_init=-0.5,)
         }
 
         # wandb init
@@ -696,19 +866,34 @@ def main():
                     "vf_coef": config['vf_coef'],
                     "max_grad_norm": config['max_grad_norm'],
                     "num_envs": config['num_envs'],
+                    "policy)kwargs":config['policy_kwargs'],
                     "include_prev_action" :config["include_prev_action"],
+                    "include_nstep_pos_obs" : config["include_nstep_pos_obs"],
+                    "goal_center_pos_nstep_norm" : config["goal_center_pos_nstep_norm"],
+                    "include_prev_tag_obs" : config["include_prev_tag_obs"],
+                    "include_prev_pos_obs" : config["include_prev_pos_obs"],
+                    "include_tag_obs" : config["include_tag_obs"],
+                    "include_tag_diff_obs" : config["include_tag_diff_obs"],
                     "include_area_obs" : config["include_area_obs"],
                     "include_shape_obs" : config["include_shape_obs"],
                     "include_tag_id_obs" : config["include_tag_id_obs"],
+                    "include_tag_vel_obs" : config["include_tag_vel_obs"],
                     "include_real_p_c_obs" : config["include_real_p_c_obs"],
-                    "centering_w_xy" : config["centering_w_xy"],
-                    "centering_w_z" : config["centering_w_z"],
-                    "centering_survival_reward" : config["centering_survival_reward"],
-                    "centering_w_action_hover" : config["centering_w_action_hover"],
-                    "centering_xy_reward_scale" : config["centering_xy_reward_scale"],
-                    "centering_w_tilt" : config["centering_w_tilt"],
-                    "use_projected_uv_out_of_view" : config["use_projected_uv_out_of_view"],
-                    "include_real_p_c_obs" : config["include_real_p_c_obs"],
+                    "include_drone_pos_obs" : config["include_drone_pos_obs"],
+                    "include_drone_z_obs" : config["include_drone_z_obs"],
+                    "include_drone_pos_diff_obs" : config["include_drone_pos_diff_obs"],
+                    "include_drone_ori_obs" : config["include_drone_ori_obs"],
+                    "include_drone_ori_diff_obs" : config["include_drone_ori_diff_obs"],
+                    "include_drone_vel_obs" : config["include_drone_vel_obs"],
+                    "include_drone_ang_vel_obs" : config["include_drone_ang_vel_obs"],
+                    "pos_coeff" : config["pos_coeff"],
+                    "ori_coeff" : config["ori_coeff"],
+                    "lin_vel_coeff" : config["lin_vel_coeff"],
+                    "tag_lin_vel_coeff" : config["tag_lin_vel_coeff"],
+                    "tag_pos_coeff" : config["tag_pos_coeff"],
+                    "ang_vel_coeff" : config["ang_vel_coeff"],
+                    "act_coeff" : config["act_coeff"],
+                    "survival_reward" : config["survival_reward"]
                 },
                 sync_tensorboard=True,  # SB3 TB 로그 자동 동기화
                 monitor_gym=False,      # 우리는 VecMonitor를 이미 씀
@@ -717,11 +902,7 @@ def main():
 
         model = PPO(
             policy="MlpPolicy",
-            policy_kwargs=dict(
-                activation_fn=torch.nn.ReLU,
-                net_arch=[dict(pi=[256, 256], vf=[512, 512])],
-                log_std_init=-0.5,
-            ),
+            policy_kwargs=config['policy_kwargs'],
             env=env,
             learning_rate=config['learning_rate'],
             n_steps=config['n_steps'],
@@ -742,6 +923,11 @@ def main():
         eval_env = None
 
         callback_list = []
+        if bool(args.rollout_reward_breakdown):
+            callback_list.append(RolloutRewardBreakdownCallback(verbose=0))
+            print("[Train] rollout reward breakdown logging: enabled")
+        else:
+            print("[Train] rollout reward breakdown logging: disabled")
         # NOTE:
         # Do not create eval_env in Unity image mode.
         # UnityBridge is a singleton and multiple VecEnv instances can corrupt
@@ -756,11 +942,25 @@ def main():
             eval_env = build_env(
                 stream_eval.getvalue(),
                 use_obs_norm=use_obs_norm,
+                include_tag_obs=include_tag_obs,
+                include_tag_vel_obs=include_tag_vel_obs,
+                include_tag_diff_obs=include_tag_diff_obs,
                 include_prev_action=include_prev_action,
+                include_nstep_pos_obs=include_nstep_pos_obs,
+                goal_center_pos_nstep_norm=goal_center_pos_nstep_norm,
+                include_prev_tag_obs=include_prev_tag_obs,
+                include_prev_pos_obs=include_prev_pos_obs,
                 include_area_obs=include_area_obs,
                 include_shape_obs=include_shape_obs,
                 include_tag_id_obs=include_tag_id_obs,
                 include_real_p_c_obs=include_real_p_c_obs,
+                include_drone_pos_obs=include_drone_pos_obs,
+                include_drone_z_obs=include_drone_z_obs,
+                include_drone_pos_diff_obs=include_drone_pos_diff_obs,
+                include_drone_ori_obs=include_drone_ori_obs,
+                include_drone_ori_diff_obs=include_drone_ori_diff_obs,
+                include_drone_vel_obs=include_drone_vel_obs,
+                include_drone_ang_vel_obs=include_drone_ang_vel_obs,
             )
             eval_callback = MeanRewardPerStepEvalCallback(
                 eval_env,
@@ -831,13 +1031,17 @@ def main():
             )
 
         if args.wandb:
-            callback_list.append(
-                WandbExtraInfoCallback(
-                    env_index=0,
-                    episode_log_freq=max(1, int(args.wandb_episode_log_freq)),
-                    verbose=0,
+            if bool(args.wandb_extra_info):
+                callback_list.append(
+                    WandbExtraInfoCallback(
+                        env_index=0,
+                        episode_log_freq=max(1, int(args.wandb_episode_log_freq)),
+                        verbose=0,
+                    )
                 )
-            )
+                print("[Train] wandb extra_info logging: enabled")
+            else:
+                print("[Train] wandb extra_info logging: disabled")
             callback_list.append(WandbCallback(
                 gradient_save_freq=0,
                 model_save_freq=100_000,
@@ -878,16 +1082,18 @@ def main():
             latest_checkpoint = max([f for f in os.listdir(find_path) if f.startswith('ppo_model_') and f.endswith('_steps.zip')], key=lambda x: int(x.split('_')[2]))
             model_path = os.path.join(find_path, latest_checkpoint)
         elif args.model_type == "custom":
-            checkpoint_num = input("Checkpoint Number:")
-            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'saved/{args.weight}/checkpoints/ppo_model_{checkpoint_num}_steps')
+            if args.custompath is None:
+                raise ValueError("Custom model path must be provided when model_type is 'custom'")
+            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'saved/{args.weight}/checkpoints/ppo_model_{args.custompath}_steps')
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled
         if use_obs_norm:
             rms_path = args.rms_path 
             if rms_path is None:
+                rms_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'saved/{args.weight}/checkpoints')
                 # Try to find RMS file from checkpoint directory
-                checkpoint_dir = model_path
+                checkpoint_dir = rms_path
                 rms_dir = os.path.join(checkpoint_dir, "RMS")
                 if os.path.exists(rms_dir):
                     # Find the latest RMS file
@@ -947,11 +1153,11 @@ def main():
                 real_pc_z = extract_extra_info_value(info[0], "real_p_c_z") if len(info) > 0 else 0.0
                 metric_area = extract_extra_info_value(info[0], "metric_area") if len(info) > 0 else 0.0
                 metric_shape2 = extract_extra_info_value(info[0], "metric_shape2") if len(info) > 0 else 0.0
-                print(
-                    f"           est_p_C=[{est_pc_x:.6f}, {est_pc_y:.6f}, {est_pc_z:.6f}] "
-                    f"| real_p_C=[{real_pc_x:.6f}, {real_pc_y:.6f}, {real_pc_z:.6f}] "
-                    f"| metric_area={metric_area:.6f} | metric_shape2={metric_shape2:.6f}"
-                )
+                #print(
+                    #f"           est_p_C=[{est_pc_x:.6f}, {est_pc_y:.6f}, {est_pc_z:.6f}] "
+                    #f"| real_p_C=[{real_pc_x:.6f}, {real_pc_y:.6f}, {real_pc_z:.6f}] "
+                    #f"| metric_area={metric_area:.6f} | metric_shape2={metric_shape2:.6f}"
+                #)
 
                 # ---- logging (policy obs shape: [1, 8]) ----
                 pixels.append(obs[0, 0:2].tolist())

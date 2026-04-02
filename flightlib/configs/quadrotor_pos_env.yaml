@@ -1,14 +1,14 @@
 quadrotor_env:
   sim_dt: 0.02
-  max_t: 100.0
-  control_mode: ctbr   # motor | ctbr
+  max_t: 10.0
+  control_mode: motor   # motor | ctbr
   world_box: [[-100, 100.0], [-100.0, 100.0], [0.0, 100.0]]  # [x_min,x_max],[y_min,y_max],[z_min,z_max]
-  init_pos: [5.5, 6.5, 60.0]                   # base reset position [x,y,z]
-  randomize_position_on_reset: true
-  randomize_position_scale: 10.0   # scale for position noise around init_pos
+  init_pos: [5.5, 6.5, 40.0]                   # base reset position [x,y,z]
+  randomize_position_on_reset: false
+  randomize_position_scale: 3.0   # scale for position noise around init_pos
   randomize_velocity_on_reset: false
   randomize_velocity_scale: 1.0   # scale for initial linear velocity noise
-  randomize_attitude_on_reset: false   # false -> start level (identity quaternion)
+  randomize_attitude_on_reset: false  # false -> start level (identity quaternion)
   randomize_attitude_scale: 1.0   # attitude random scale (used only when randomize_attitude_on_reset=true)
   camera:
      # Camera pose in quadrotor body frame (B -> C)
@@ -65,7 +65,7 @@ quadrotor_dynamics:
 
 rl:
   ######terminal 조건######################################################################
-  landing_terminal_z: 3.02  #consider terminted when z<terminal_Z
+  landing_terminal_z: 0.02  #consider terminted when z<terminal_Z
   landing_tilt_hard: 10 #terminate when tilt exceeds this [radian]
 
 
@@ -76,29 +76,56 @@ rl:
 
   ########### 로그 ##############
   log_interval_steps: 1 # ___ step 마다 로그 출력
+  enable_step_log: false
+
 
   ####### reward ###########################################################################
-  centering_w_xy: 0 # xy centering reward weight toward the target tag
-  centering_xy_reward_scale: 0.2 # scale factor in reward_xy = w_xy / (1 + scale * xy_error)
-  centering_w_z: 0.00 # z-axis tracking penalty weight while centering
-  centering_w_tilt: 0.0 # tilt penalty weight; larger tilt gets penalized more strongly
-  centering_survival_reward: 0.5 # constant reward added every alive step during centering
-  centering_w_action_hover: 0.0 # penalty weight for deviation from the centering hover action [0, 0, 0, 0]
+  #state hovering reward 
+  # Keep coeffs 0.0 to disable. Increase gradually when mixing with tag/centering rewards.
+  pos_coeff: -0.00125      # * ||p - goal_pos||^2
+  tag_pos_coeff: 0.0   # * ||[tag_center_x, tag_center_y, tag_area] - goal_tag_pos||^2
+  ori_coeff: -0.00125      # * ||[yaw,pitch,roll] - goal_ori||^2
+  lin_vel_coeff: -0.00125  # * ||v - goal_lin_vel||^2
+  tag_lin_vel_coeff: 0.0   # * ||tag_lin_vel(center+corners 10D) - goal_tag_lin_vel||^2
+  ang_vel_coeff: -0.00125   # * ||w - goal_ang_vel||^2
+  act_coeff: -0.00005     # * ||normalized_action||
+  survival_reward: 0.05   # constant reward added every step
 
-  tag_center_coeff: 0.0 # positive reward from image-plane tag center proximity to the screen center
-  tag_center_progress_coeff: 100.0 # positive reward when image-plane center error decreases compared to the previous step
-  tag_area_coeff: 0.0 # reward when observed tag area is close to tag_target_area
-  tag_shape_coeff: 100.0 # reward when tag edges are aligned with the image x/y axes
-  tag_target_area: 300.0 # desired tag area in image pixels^2
-  tag_area_error_scale: 3.0 # larger -> area reward peaks more sharply around tag_target_area
-  tag_shape_error_scale: 8.0 # larger -> shape reward drops much faster when edges are not parallel to image x/y axes
-  tag_missing_penalty: 100.0 # penalty applied when tag center/corners are unavailable in the observation
+
+  # goals for tracking terms above
+  goal_pos: [5.5, 6.5, 40.0]      # [x, y, z]
+  goal_ori: [0.0, 0.0, 0.0]       # [yaw, pitch, roll] in rad
+  goal_lin_vel: [0.0, 0.0, 0.0]   # [vx, vy, vz]
+  goal_tag_pos: [41.52, 41.25, 300.0] # [center_x, center_y, area]
+  goal_tag_lin_vel: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # [center_x, center_y, c0x, c0y, c1x, c1y, c2x, c2y, c3x, c3y] velocity target
+  goal_ang_vel: [0.0, 0.0, 0.0]   # [wx, wy, wz]
+
+
+
+
+
+  
 
   ###############설정값#############################################################
-  hold_last_tag_obs: false # whether to hold the last observed tag pose when the tag is not observed (e.g., during landing when the tag is on the ground and not visible)
-  include_prev_action: 4 # append the last N actions to PPO observation (0 disables action history)
+  include_tag_obs: false # include tag observation block (tag coords/id) in PPO observation
+  include_tag_vel_obs: false # append tag velocity-like block ((current - previous) / dt) to PPO observation
+  include_tag_diff_obs: false # append pure tag difference block (current - previous) to PPO observation
+  include_prev_tag_obs: 0 # append last N previous-step tag observation blocks to PPO observation (0 disables)
+  include_tag_id_obs: false # include tag_id in the tag block passed to PPO
   include_area_obs: false # append the tag area metric to PPO observation in the Python wrapper
   include_shape_obs: false # append the tag shape metric to PPO observation in the Python wrapper
-  include_tag_id_obs: false # include tag_id in the tag block passed to PPO
+  include_prev_action: 0 # append the last N actions to PPO observation (0 disables action history)
+  include_nstep_pos_obs: 10 # append past position blocks; examples: 5 -> pos_t-5, [5,10] or "5,10" -> pos_t-5 and pos_t-10 (0 disables)
   include_real_p_c_obs: false # append world-derived real p_C=[x,y,z] to PPO observation in the Python wrapper
-  use_projected_uv_out_of_view: true # if true, use projected uv values even when the tag is outside the image, as long as the projection is valid
+  include_drone_pos_obs: true # append drone position [x, y, z] to PPO observation
+  include_drone_z_obs: false # append drone z position only [z] to PPO observation
+  include_drone_pos_diff_obs: false # append drone position delta [dx, dy, dz] = current_pos - last_pos to PPO observation
+  include_prev_pos_obs: 0 # append last N previous-step drone position blocks [prev_x, prev_y, prev_z] to PPO observation (0 disables)
+  include_drone_ori_obs: true # append drone orientation [roll, pitch, yaw] to PPO observation
+  include_drone_ori_diff_obs: false # append drone orientation delta [droll, dpitch, dyaw] = current_ori - last_ori to PPO observation
+  include_drone_vel_obs: false # append drone linear velocity [vx, vy, vz] to PPO observation
+  include_drone_ang_vel_obs: true # append drone angular velocity [wx, wy, wz] to PPO observation
+
+  hold_last_tag_obs: false # whether to hold the last observed tag pose when the tag is not observed (e.g., during landing when the tag is on the ground and not visible)
+  use_projected_uv_out_of_view: false # if true, use projected uv values even when the tag is outside the image, as long as the projection is valid
+  goal_center_pos_nstep_norm: true # if true, normalize current/nstep position around goal mean [5.5, 6.5, 40.0] using RMS std

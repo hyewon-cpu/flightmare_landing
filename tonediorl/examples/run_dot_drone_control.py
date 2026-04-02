@@ -96,20 +96,11 @@ def parser():
                    help="Checkpoint save frequency in total timesteps. Default is 50,000.")
 
     # wandb
-    parser.add_argument('--wandb', type=int, default=0, help="Enable wandb logging")
+    parser.add_argument('--wandb', type=int, default=1, help="Enable wandb logging")
     parser.add_argument('--wandb_project', type=str, default='flightmare_landing', help="wandb project name")
     parser.add_argument('--wandb_run_name', type=str, default=None, help="wandb run name")
     parser.add_argument('--wandb_episode_log_freq', type=int, default=10,
                         help="Log episode metrics to wandb every N episodes")
-    parser.add_argument('--use_obs_norm', type=int, default=0, help="Use observation normalization (1=True, 0=False)")
-    parser.add_argument('--include_prev_action', type=int, default=0,
-                        help="Append previous action to policy observation (1=True, 0=False)")
-    parser.add_argument('--include_area_obs', type=int, default=1,
-                        help="Include area feature in PPO observation when available (1=True, 0=False)")
-    parser.add_argument('--include_shape_obs', type=int, default=1,
-                        help="Include shape feature in PPO observation when available (1=True, 0=False)")
-    parser.add_argument('--include_tag_id_obs', type=int, default=0,
-                        help="Include tag_id in PPO observation for each tag block (1=True: 11 dims, 0=False: 10 dims)")
     parser.add_argument('--rms_path', type=str, default=None, 
                         help="Path to normalization statistics (.npz file) for testing. "
                              "If None, will try to find RMS file from checkpoint directory.")
@@ -121,6 +112,11 @@ def parser():
                         help="Projection visualization image width in pixels")
     parser.add_argument('--proj_img_height', type=int, default=256,
                         help="Projection visualization image height in pixels")
+    parser.add_argument('--save_tag_viz_video', type=int, default=0,
+                        help="Save the tag visualization window as a video during train/test")
+    parser.add_argument('--tag_viz_video_path', type=str,
+                        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "videos", f"tag_viz_{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.mp4"),
+                        help="Output video path for the tag visualization window")
     parser.add_argument('--save_obs_image', type=int, default=0,
                         help="Save observation RGB images during training/testing (1=True, 0=False)")
     parser.add_argument('--obs_image_save_dir', type=str,
@@ -130,6 +126,16 @@ def parser():
                         help="Save one image every N callback/test steps")
     parser.add_argument('--init_pos', type=float, nargs=3, metavar=('X', 'Y', 'Z'), default=None,
                         help="Override quadrotor initial position in meters, e.g. --init_pos 0 0 10")
+    parser.add_argument('--fallback_start_z', type=float, default=10.0,
+                        help="Start fallback stabilization when drone_pos_z <= this value")
+    parser.add_argument('--fallback_descent_thrust_action', type=float, default=0.8,
+                        help="Normalized thrust action used during fallback (-1..1, 0=hover)")
+    parser.add_argument('--fallback_attitude_gain', type=float, default=2.0,
+                        help="Proportional gain for roll/pitch stabilization during fallback")
+    parser.add_argument('--viz_action_timeline', type=int, default=0,
+                        help="Show a separate OpenCV window with thrust/roll_rate/pitch_rate over time during testing")
+    parser.add_argument('--viz_body_rate_vector', type=int, default=0,
+                        help="Show a separate OpenCV window with body-rate vectors during testing")
     return parser
 
 
@@ -156,10 +162,33 @@ def get_stage_switch_enabled():
     return bool(quad_cfg.get("rl", {}).get("stage_switch_enabled", True))
 
 
+def parse_prev_action_config(value):
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return max(0, int(value))
+
+
+def get_obs_wrapper_config():
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    quad_cfg_path = os.path.join(root_dir, "flightlib", "configs", "quadrotor_dot_env.yaml")
+    yaml = YAML()
+    with open(quad_cfg_path, "r") as f:
+        quad_cfg = yaml.load(f)
+    rl_cfg = quad_cfg.get("rl", {})
+    return {
+        "use_obs_norm": bool(rl_cfg.get("use_obs_norm", False)),
+        "include_prev_action": parse_prev_action_config(rl_cfg.get("include_prev_action", 0)),
+        "include_area_obs": bool(rl_cfg.get("include_area_obs", True)),
+        "include_shape_obs": bool(rl_cfg.get("include_shape_obs", True)),
+        "include_tag_id_obs": bool(rl_cfg.get("include_tag_id_obs", False)),
+        "stage_switch_enabled": bool(rl_cfg.get("stage_switch_enabled", True)),
+    }
+
+
 def build_env(
     cfg_yaml_str,
     use_obs_norm=True,
-    include_prev_action=True,
+    include_prev_action=0,
     stage_switch_enabled=True,
     include_area_obs=True,
     include_shape_obs=True,
@@ -168,7 +197,7 @@ def build_env(
     env = wrapper.DotFlightEnvVec(   
         QuadrotorDotEnv_v1(cfg_yaml_str, False),
         use_obs_norm=use_obs_norm,
-        include_prev_action=bool(include_prev_action),
+        include_prev_action=int(include_prev_action),
         stage_switch_enabled=bool(stage_switch_enabled),
         include_area_obs=bool(include_area_obs),
         include_shape_obs=bool(include_shape_obs),
@@ -179,7 +208,12 @@ def build_env(
     return env
     #DotFlightEnvVec는 Stable Baselines3에서 사용할 수 있도록 Flightmare의 QuadrotorDotEnv_v1을 래핑한 클래스.
     #QuadrotorDotEnv_v1 는 Flightmare 시뮬레이터에서 제공하는 드론 제어 환경. pybind_wrapper.cpp 에서 C++로 구현된 환경을 Python에서 사용할 수 있도록 래핑한 클래스.
-    # cfg_yaml_str은 환경 설정을 담은 YAML 문자열. use_obs_norm과 include_prev_action은 관측값 정규화와 이전 행동 포함 여부를 설정하는 플래그.
+    # cfg_yaml_str은 환경 설정을 담은 YAML 문자열. use_obs_norm과 include_prev_action은
+    # 관측값 정규화와 이전 행동 history 길이를 설정한다.
+
+
+def get_saved_run_dir(run_name):
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), "saved", run_name)
 
 
 #raw image -> tag 정보와 이미지 정보 분리(_parse_tag_and_image) -> tag 정보에서 각 태그의 위치, ID, 가시성 등 추출 -> 이미지와 태그 정보를 시각화하는 함수들
@@ -229,27 +263,23 @@ def _split_tags(tag_flat):
     return parsed
 
 
-def show_combined_scene_from_raw(raw_obs_flat, width: int, height: int):
+def render_tag_scene_from_raw(raw_obs_flat, width: int, height: int):
     tag, img = _parse_tag_and_image(raw_obs_flat) #raw_obs_flat에서 tag 정보와 이미지 정보를 분리해서 반환. tag는 11차원 벡터, img는 84x84x3 형태의 RGB 이미지로 변환.
     if tag is None or img is None:
-        return
+        return None
     tags = _split_tags(tag) #tag 별로 딕셔너리 형태로 만듬. tag 하나에 dictionary 한 객체. 
 
     width = max(1, int(width))
     height = max(1, int(height))
     panel_img = cv2.resize(img, (width, height), interpolation=cv2.INTER_NEAREST)
     #cv2.INTER_NEARES = 이미지를 확대할 때 가장 가까운 픽셀의 값을 그대로 복사해서 확대하는 방식. 이미지가 픽셀화되어 보이지만, 태그 경계가 뚜렷하게 보이는 효과가 있음.
-    panel_proj = np.zeros((height, width, 3), dtype=np.uint8)
-    #panel_proj = [ [ [R,G,B] [] [] ] [            ] [] [] [] ...]
 
     sx = float(width - 1) / 83.0 #시각화 패널 크기에 맞추기 위해서 원래 이미지의 84x84 크기를 패널 크기에 맞게 스케일링하는 비율 계산. 
     sy = float(height - 1) / 83.0
 
-    # Projection panel grid
     c_x = int(round(0.5 * float(width - 1))) #시각화 패널 중심 좌표 
     c_y = int(round(0.5 * float(height - 1)))
-    cv2.line(panel_proj, (0, c_y), (width - 1, c_y), (70, 70, 70), 1) #회색으로 중앙 가로선 그리기
-    cv2.line(panel_proj, (c_x, 0), (c_x, height - 1), (70, 70, 70), 1) #회색으로 중앙 세로선 그리기 
+    image_center = (c_x, c_y)
 
     def to_panel_xy(x84, y84):
         #원래 이미지 좌표 (x84, y84)를 시각화 패널 좌표 (x, y)로 변환.
@@ -266,8 +296,9 @@ def show_combined_scene_from_raw(raw_obs_flat, width: int, height: int):
         (255, 255, 0),
     ]
     visible_tags = [t for t in tags if t["visible"]] #tags 에서 visibie=True 인 태그만 골라서 visible_tags 리스트에 저장.
+    display_tags = visible_tags
     if visible_tags: #visible_tags 리스트가 비어있지 않으면 (즉, 하나 이상의 태그가 보이면)
-        for t in visible_tags:
+        for draw_idx, t in enumerate(display_tags):
             color = palette[t["idx"] % len(palette)] #palette 의 길이로 나눈값의 나머지가 인덱스. 인덱스로 palette 에서 생상을 선택. 
             center = t["center"] #중앙 좌표 
             corners = t["corners"] #모서리들의 좌표 
@@ -278,36 +309,55 @@ def show_combined_scene_from_raw(raw_obs_flat, width: int, height: int):
                 #*corners[i] = (corners[i][0],corners[i][1])
                 p1 = to_panel_xy(*corners[(i + 1) % 4]) #다음 모서리들의 좌표를 시각화 패널 사이즈에 맞게 변환
                 cv2.line(panel_img, p0, p1, color, 2) #p0와 p1을 color 색으로 두껍게 선 그리기. 패널 이미지에 태그의 모서리를 연결하는 선을 그림.
-                cv2.circle(panel_img, p0, 4, color, -1) #p0 위치에 color 색으로 반지름 4의 원 그리기. 패널 이미지에 태그의 모서리 위치를 원으로 표시.
+                cv2.circle(panel_img, p0, 2, (255, 255, 255), -1) #p0 위치에 흰색 원 그리기. 패널 이미지에 태그의 모서리 위치를 표시.
             cpt = to_panel_xy(*center)
-            cv2.circle(panel_img, cpt, 4, (0, 0, 255), -1) #cpt 위치에 (0,0,255)색으로 반지름 4의 원 그리기 
+            if draw_idx == 0:
+                cv2.line(panel_img, image_center, cpt, (255, 255, 0), 1)
+            cv2.circle(panel_img, image_center, 2, (0, 0, 255), -1)
+            cv2.circle(panel_img, cpt, 2, (0, 255, 0), -1)
             cv2.putText(panel_img, f"id{tid}", (cpt[0] + 6, cpt[1] - 6), #cpt[0] + 6, cpt[1]-6 위치에 "id{tid}" 텍스트를 color 색으로 크기 0.45로 그리기. 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-
-            for i in range(4): #투영 패널에 그리기 
-                p0 = to_panel_xy(*corners[i])
-                p1 = to_panel_xy(*corners[(i + 1) % 4])
-                cv2.line(panel_proj, p0, p1, color, 2)
-                cv2.circle(panel_proj, p0, 4, color, -1)
-            cv2.circle(panel_proj, cpt, 4, (0, 0, 255), -1)
-            cv2.putText(panel_proj, f"id{tid} c=({center[0]:.1f},{center[1]:.1f})",
-                        (max(0, cpt[0] - 30), max(15, cpt[1] - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-        cv2.putText(panel_proj, f"visible tags: {len(visible_tags)}/{len(tags)}", (8, 22), #보이는 개수/전체 개수 텍스트 
+        cv2.putText(panel_img, f"visible tags: {len(display_tags)}/{len(tags)}", (8, 22), #보이는 개수/전체 개수 텍스트 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 2)
     else: #태그가 하나도 안보이면 패널 이미지와 투영 패널에 "no tag visible" 텍스트를 빨간색으로 그리기
         cv2.putText(panel_img, "no tag visible", (8, 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        cv2.putText(panel_proj, "no tag visible", (8, 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
     cv2.putText(panel_img, "OBS IMAGE", (8, height - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    cv2.putText(panel_proj, "PROJECTION", (8, height - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    scene = np.concatenate([panel_img, panel_proj], axis=1)
-    cv2.imshow("Dot Scene (Image + Projection)", scene)
+    cv2.circle(panel_img, image_center, 2, (0, 0, 255), -1)
+    return panel_img
+
+
+def show_combined_scene_from_raw(raw_obs_flat, width: int, height: int):
+    panel_img = render_tag_scene_from_raw(raw_obs_flat, width, height)
+    if panel_img is None:
+        return None
+    cv2.imshow("Dot Scene (Image + Tag)", panel_img)
     cv2.waitKey(1)
+    return panel_img
+
+
+class TagVizVideoWriter:
+    def __init__(self, output_path: str, fps: float = 30.0):
+        self.output_path = output_path
+        self.fps = float(fps)
+        self.writer = None
+
+    def write(self, frame):
+        if frame is None:
+            return
+        if self.writer is None:
+            os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
+            height, width = frame.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            self.writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, (width, height))
+        self.writer.write(frame)
+
+    def close(self):
+        if self.writer is not None:
+            self.writer.release()
+            self.writer = None
 
 
 def save_obs_image_from_raw(raw_obs_flat, save_path: str):
@@ -336,6 +386,188 @@ def get_raw_obs_from_vec_env(vec_env):
     return raw[0] #첫번째 environment 의 raw observation 반환 
 
 
+def extract_extra_info_value(info, key, default=0.0):
+    if not isinstance(info, dict):
+        return float(default)
+    extra = info.get("extra_info", None)
+    if not isinstance(extra, dict):
+        return float(default)
+    return float(extra.get(key, default))
+
+
+def build_fallback_descent_action(action_dim: int, thrust_action: float = 0.0) -> np.ndarray:
+    action = np.zeros((1, max(1, int(action_dim))), dtype=np.float32)
+    action[0, 0] = float(np.clip(thrust_action, -1.0, 1.0))
+    return action
+
+
+def build_fallback_upright_descent_action(
+    action_dim: int,
+    thrust_action: float,
+    roll: float,
+    pitch: float,
+    attitude_gain: float,
+    omega_max_xy,
+) -> np.ndarray:
+    action = build_fallback_descent_action(action_dim, thrust_action=thrust_action)
+    if action.shape[1] < 4:
+        return action
+
+    omega_x_max = max(1e-6, float(omega_max_xy[0]))
+    omega_y_max = max(1e-6, float(omega_max_xy[1]))
+
+    desired_roll_rate = -float(attitude_gain) * float(roll)
+    desired_pitch_rate = -float(attitude_gain) * float(pitch)
+
+    action[0, 1] = float(np.clip(desired_roll_rate / omega_x_max, -1.0, 1.0))
+    action[0, 2] = float(np.clip(desired_pitch_rate / omega_y_max, -1.0, 1.0))
+    action[0, 3] = 0.0
+    return action
+
+
+class ActionTimelineVisualizer:
+    def __init__(self, window_name="Action Timeline", width=900, height=320, history=240):
+        self.window_name = window_name
+        self.width = int(width)
+        self.height = int(height)
+        self.history = max(10, int(history))
+        self._signals = {
+            "roll_rate": [],
+            "pitch_rate": [],
+            "yaw_rate": [],
+        }
+        self._colors = {
+            "roll_rate": (0, 0, 255),
+            "pitch_rate": (0, 255, 0),
+            "yaw_rate": (255, 0, 0),
+        }
+
+    def update(self, act):
+        act = np.asarray(act, dtype=np.float32).reshape(-1)
+        values = {
+            "roll_rate": float(act[1]) if act.shape[0] > 1 else 0.0,
+            "pitch_rate": float(act[2]) if act.shape[0] > 2 else 0.0,
+            "yaw_rate": float(act[3]) if act.shape[0] > 3 else 0.0,
+        }
+        for key, value in values.items():
+            self._signals[key].append(value)
+            if len(self._signals[key]) > self.history:
+                self._signals[key].pop(0)
+
+        canvas = np.full((self.height, self.width, 3), 18, dtype=np.uint8)
+        left = 70
+        right = self.width - 20
+        top = 30
+        bottom = self.height - 40
+        plot_w = right - left
+        plot_h = bottom - top
+        mid_y = top + plot_h // 2
+
+        cv2.putText(canvas, self.window_name, (20, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 230, 230), 2)
+        cv2.rectangle(canvas, (left, top), (right, bottom), (70, 70, 70), 1)
+        cv2.line(canvas, (left, mid_y), (right, mid_y), (60, 60, 60), 1)
+        cv2.putText(canvas, "+0.05", (12, top + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1)
+        cv2.putText(canvas, "0.0", (24, mid_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1)
+        cv2.putText(canvas, "-0.05", (12, bottom + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1)
+
+        def to_point(idx, value):
+            x = left + int(round((idx / max(1, self.history - 1)) * plot_w))
+            value = float(np.clip(value, -0.05, 0.05))
+            normalized = value / 0.05
+            y = top + int(round(((1.0 - normalized) * 0.5) * plot_h))
+            return x, y
+
+        for name in ("roll_rate", "pitch_rate", "yaw_rate"):
+            values_hist = self._signals[name]
+            if len(values_hist) < 2:
+                continue
+            pts = np.array([to_point(i, v) for i, v in enumerate(values_hist)], dtype=np.int32)
+            cv2.polylines(canvas, [pts], False, self._colors[name], 2)
+
+        legend_y = self.height - 12
+        legend_items = [
+            ("roll_rate", values["roll_rate"]),
+            ("pitch_rate", values["pitch_rate"]),
+            ("yaw_rate", values["yaw_rate"]),
+        ]
+        legend_x = 20
+        for name, value in legend_items:
+            color = self._colors[name]
+            cv2.line(canvas, (legend_x, legend_y - 5), (legend_x + 18, legend_y - 5), color, 3)
+            cv2.putText(
+                canvas,
+                f"{name}={value:.3f}",
+                (legend_x + 24, legend_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+            )
+            legend_x += 220
+
+        cv2.imshow(self.window_name, canvas)
+        cv2.waitKey(1)
+
+    def close(self):
+        cv2.destroyWindow(self.window_name)
+
+
+class BodyRateVectorVisualizer:
+    def __init__(self, window_name="Body Rate Vectors"):
+        self.window_name = window_name
+        self.limit = 0.05
+        self.width = 420
+        self.height = 420
+        self.center = np.array([self.width // 2, self.height // 2], dtype=np.float32)
+        self.scale = 2200.0
+
+    def _project(self, vec3):
+        x, y, z = vec3
+        px = self.center[0] + x - 0.6 * y
+        py = self.center[1] - z - 0.35 * y
+        return int(round(px)), int(round(py))
+
+    def update(self, act):
+        act = np.asarray(act, dtype=np.float32).reshape(-1)
+        roll_rate = float(act[1]) if act.shape[0] > 1 else 0.0
+        pitch_rate = float(act[2]) if act.shape[0] > 2 else 0.0
+        yaw_rate = float(act[3]) if act.shape[0] > 3 else 0.0
+        roll_rate = float(np.clip(roll_rate, -self.limit, self.limit))
+        pitch_rate = float(np.clip(pitch_rate, -self.limit, self.limit))
+        yaw_rate = float(np.clip(yaw_rate, -self.limit, self.limit))
+        canvas = np.full((self.height, self.width, 3), 18, dtype=np.uint8)
+        cv2.putText(canvas, self.window_name, (16, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 230, 230), 2)
+
+        origin = self._project((0.0, 0.0, 0.0))
+        axis_len = self.limit * self.scale
+        x_axis = self._project((axis_len, 0.0, 0.0))
+        y_axis = self._project((0.0, axis_len, 0.0))
+        z_axis = self._project((0.0, 0.0, axis_len))
+        cv2.arrowedLine(canvas, origin, x_axis, (70, 70, 140), 1, tipLength=0.12)
+        cv2.arrowedLine(canvas, origin, y_axis, (70, 140, 70), 1, tipLength=0.12)
+        cv2.arrowedLine(canvas, origin, z_axis, (140, 70, 70), 1, tipLength=0.12)
+        cv2.putText(canvas, "x", (x_axis[0] + 4, x_axis[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 120, 220), 1)
+        cv2.putText(canvas, "y", (y_axis[0] + 4, y_axis[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 220, 120), 1)
+        cv2.putText(canvas, "z", (z_axis[0] + 4, z_axis[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 120, 120), 1)
+
+        roll_end = self._project((roll_rate * self.scale, 0.0, 0.0))
+        pitch_end = self._project((0.0, pitch_rate * self.scale, 0.0))
+        yaw_end = self._project((0.0, 0.0, yaw_rate * self.scale))
+        cv2.arrowedLine(canvas, origin, roll_end, (0, 0, 255), 2, tipLength=0.18)
+        cv2.arrowedLine(canvas, origin, pitch_end, (0, 255, 0), 2, tipLength=0.18)
+        cv2.arrowedLine(canvas, origin, yaw_end, (0, 255, 255), 2, tipLength=0.18)
+
+        cv2.putText(canvas, f"roll_rate: {roll_rate:.3f}", (16, self.height - 54), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+        cv2.putText(canvas, f"pitch_rate: {pitch_rate:.3f}", (16, self.height - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+        cv2.putText(canvas, f"yaw_rate: {yaw_rate:.3f}", (16, self.height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
+        cv2.putText(canvas, f"axis limit: +/-{self.limit:.2f}", (250, self.height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+        cv2.imshow(self.window_name, canvas)
+        cv2.waitKey(1)
+
+    def close(self):
+        cv2.destroyWindow(self.window_name)
+
+
 class ProjectionVizCallback(BaseCallback):
     def __init__(
         self,
@@ -343,6 +575,8 @@ class ProjectionVizCallback(BaseCallback):
         height: int = 256,
         show_windows: bool = True,
         show_scene: bool = False,
+        save_tag_viz_video: bool = False,
+        tag_viz_video_path: str = "",
         save_obs_image: bool = False,
         obs_image_save_dir: str = "",
         obs_image_save_every: int = 10,
@@ -353,6 +587,13 @@ class ProjectionVizCallback(BaseCallback):
         self.height = max(1, int(height))
         self.show_windows = bool(show_windows)
         self.show_scene = bool(show_scene)
+        self.save_tag_viz_video = bool(save_tag_viz_video)
+        self.tag_viz_video_path = str(tag_viz_video_path)
+        self.tag_viz_video_writer = (
+            TagVizVideoWriter(self.tag_viz_video_path)
+            if self.save_tag_viz_video and self.tag_viz_video_path
+            else None
+        )
         self.save_obs_image = bool(save_obs_image)
         self.obs_image_save_dir = obs_image_save_dir
         self.obs_image_save_every = max(1, int(obs_image_save_every))
@@ -361,8 +602,14 @@ class ProjectionVizCallback(BaseCallback):
     def _on_step(self) -> bool:
         raw_obs = get_raw_obs_from_vec_env(self.training_env) #첫번째 environment 의 observation 
         if raw_obs is not None:
-            if self.show_windows and self.show_scene:
-                show_combined_scene_from_raw(raw_obs, self.width, self.height)
+            if self.show_scene or self.tag_viz_video_writer is not None:
+                frame = render_tag_scene_from_raw(raw_obs, self.width, self.height)
+                if frame is not None:
+                    if self.show_windows and self.show_scene:
+                        cv2.imshow("Dot Scene (Image + Tag)", frame)
+                        cv2.waitKey(1)
+                    if self.tag_viz_video_writer is not None:
+                        self.tag_viz_video_writer.write(frame)
             if self.save_obs_image and (self.n_calls % self.obs_image_save_every == 0):
                 save_path = os.path.join(
                     self.obs_image_save_dir,
@@ -372,6 +619,9 @@ class ProjectionVizCallback(BaseCallback):
                     self._saved_count += 1
         return True
 
+    def _on_training_end(self) -> None:
+        if self.tag_viz_video_writer is not None:
+            self.tag_viz_video_writer.close()
 
 class WandbExtraInfoCallback(BaseCallback):
     def __init__(self, env_index: int = 0, episode_log_freq: int = 1, verbose: int = 0):
@@ -544,6 +794,11 @@ def main():
         
     with open(cfg2_path, "r") as f:
         cfg2 = yaml.load(f)
+    omega_max_cfg = cfg2["quadrotor_dynamics"].get("omega_max", [0.8, 0.8, 0.5])
+    fallback_omega_max_xy = (
+        float(omega_max_cfg[0]) if len(omega_max_cfg) > 0 else 0.8,
+        float(omega_max_cfg[1]) if len(omega_max_cfg) > 1 else 0.8,
+    )
 
 
     if not args.train:
@@ -568,15 +823,17 @@ def main():
     # print(cfg_yaml_str)
 
     # main env
-    use_obs_norm = bool(args.use_obs_norm)
-    include_prev_action = bool(args.include_prev_action)
-    include_area_obs = bool(args.include_area_obs)
-    include_shape_obs = bool(args.include_shape_obs)
-    include_tag_id_obs = bool(args.include_tag_id_obs)
-    stage_switch_enabled = get_stage_switch_enabled()
+    obs_wrapper_cfg = get_obs_wrapper_config()
+    use_obs_norm = obs_wrapper_cfg["use_obs_norm"]
+    include_prev_action = obs_wrapper_cfg["include_prev_action"]
+    include_area_obs = obs_wrapper_cfg["include_area_obs"]
+    include_shape_obs = obs_wrapper_cfg["include_shape_obs"]
+    include_tag_id_obs = obs_wrapper_cfg["include_tag_id_obs"]
+    stage_switch_enabled = obs_wrapper_cfg["stage_switch_enabled"]
     print(
-        f"[Config] rl.stage_switch_enabled={stage_switch_enabled}, "
-        f"include_area_obs={include_area_obs}, include_shape_obs={include_shape_obs}, "
+        f"[Config] use_obs_norm={use_obs_norm}, include_prev_action={include_prev_action}, "
+        f"rl.stage_switch_enabled={stage_switch_enabled}, include_area_obs={include_area_obs}, "
+        f"include_shape_obs={include_shape_obs}, "
         f"include_tag_id_obs={include_tag_id_obs}"
     )
     env = build_env(
@@ -610,10 +867,10 @@ def main():
         # save the configuration and other files
         rsg_root = os.path.dirname(os.path.abspath(__file__))
         log_dir = rsg_root + '/saved'
-        saver = U.ConfigurationSaver(log_dir=log_dir)
+        saver = U.ConfigurationSaver(log_dir=log_dir, run_name=args.wandb_run_name)
 
         n_envs = env.num_envs
-        n_steps = 250
+        n_steps = 1000
         batch_size = n_steps * n_envs  # emulate nminibatches=1
         checkpoint_freq_total = max(1, int(args.checkpoint_freq))
         checkpoint_freq_calls = max(1, checkpoint_freq_total // max(1, int(n_envs)))
@@ -655,6 +912,11 @@ def main():
             "max_grad_norm" : 0.5,
             "num_envs" : n_envs,
             "use_sde" : False,
+            "policy": "MlpPolicy",
+            "policy_activation_fn": "ReLU",
+            "policy_net_arch": [dict(pi=[256, 256], vf=[512, 512])],
+            "policy_log_std_init": -0.5,
+            "device": "cuda",
         }
 
         # wandb init
@@ -663,32 +925,18 @@ def main():
             wandb_run = wandb.init(
                 project=args.wandb_project,
                 name=args.wandb_run_name,
-                config={
-                    "algo": config['algo'],
-                    "seed": config['seed'],
-                    "gamma": config['gamma'],
-                    "gae_lambda": config['gae_lambda'],
-                    "n_steps": config['n_steps'],
-                    "batch_size": config['batch_size'],
-                    "n_epochs": config['n_epochs'],
-                    "clip_range": config['clip_range'],
-                    "learning_rate": config['learning_rate'],
-                    "ent_coef": config['ent_coef'],
-                    "vf_coef": config['vf_coef'],
-                    "max_grad_norm": config['max_grad_norm'],
-                    "num_envs": config['num_envs']
-                },
+                config=config,
                 sync_tensorboard=True,  # SB3 TB 로그 자동 동기화
                 monitor_gym=False,      # 우리는 VecMonitor를 이미 씀
                 save_code=True,
             )
 
         model = PPO(
-            policy="MlpPolicy",
+            policy=config["policy"],
             policy_kwargs=dict(
-                activation_fn=torch.nn.ReLU,
-                net_arch=[dict(pi=[256, 256], vf=[512, 512])],
-                log_std_init=-0.5,
+                activation_fn=getattr(torch.nn, config["policy_activation_fn"]),
+                net_arch=config["policy_net_arch"],
+                log_std_init=config["policy_log_std_init"],
             ),
             env=env,
             learning_rate=config['learning_rate'],
@@ -704,7 +952,7 @@ def main():
             tensorboard_log=saver.data_dir,
             use_sde=config['use_sde'], # Whether to use generalized State Dependent Exploration (gSDE) instead of action noise exploration 
             verbose=1,
-            device="cuda",
+            device=config["device"],
         )
 
         eval_env = None
@@ -774,6 +1022,8 @@ def main():
                     height=args.proj_img_height,
                     show_windows=True,
                     show_scene=True,
+                    save_tag_viz_video=bool(args.save_tag_viz_video),
+                    tag_viz_video_path=args.tag_viz_video_path,
                     save_obs_image=bool(args.save_obs_image),
                     obs_image_save_dir=(
                         args.obs_image_save_dir
@@ -788,6 +1038,8 @@ def main():
                 ProjectionVizCallback(
                     show_windows=False,
                     show_scene=False,
+                    save_tag_viz_video=bool(args.save_tag_viz_video),
+                    tag_viz_video_path=args.tag_viz_video_path,
                     save_obs_image=True,
                     obs_image_save_dir=(
                         args.obs_image_save_dir
@@ -839,23 +1091,24 @@ def main():
 
     else:
         # Test mode (simple loop)
+        run_dir = get_saved_run_dir(args.weight)
         if args.model_type == "best":
-            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/best_model/best_model.zip')
-        if args.model_type == "final":
-            find_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),f'saved/{args.weight}/checkpoints')
+            model_path = os.path.join(run_dir, "best_model", "best_model.zip")
+        elif args.model_type == "final":
+            find_path = os.path.join(run_dir, "checkpoints")
             latest_checkpoint = max([f for f in os.listdir(find_path) if f.startswith('ppo_model_') and f.endswith('_steps.zip')], key=lambda x: int(x.split('_')[2]))
             model_path = os.path.join(find_path, latest_checkpoint)
         elif args.model_type == "custom":
             checkpoint_num = input("Checkpoint Number:")
-            model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'saved/{args.weight}/checkpoints/ppo_model_{checkpoint_num}_steps')
+            model_path = os.path.join(run_dir, "checkpoints", f"ppo_model_{checkpoint_num}_steps")
         model = PPO.load(model_path, env=env, device="auto")
         
         # Load normalization statistics if normalization is enabled
         if use_obs_norm:
             rms_path = args.rms_path 
             if rms_path is None:
+                checkpoint_dir = os.path.join(run_dir, "checkpoints")
                 # Try to find RMS file from checkpoint directory
-                checkpoint_dir = model_path
                 rms_dir = os.path.join(checkpoint_dir, "RMS")
                 if os.path.exists(rms_dir):
                     # Find the latest RMS file
@@ -882,9 +1135,20 @@ def main():
         # Disable truncation for testing - allow episodes to run until crash or manual stop
         # This allows testing how long the model can hover without time limit
         env.wrapper.setTruncationEnabled(False)
+        if hasattr(env.wrapper, "setLandingTerminalEnabled"):
+            env.wrapper.setLandingTerminalEnabled(False)
         print(f"[Test Mode] Truncation disabled - episodes will run until crash or manual stop")
+        action_timeline_viz = ActionTimelineVisualizer() if bool(args.viz_action_timeline) else None
+        body_rate_vector_viz = BodyRateVectorVisualizer() if bool(args.viz_body_rate_vector) else None
+        tag_viz_video_writer = (
+            TagVizVideoWriter(args.tag_viz_video_path)
+            if bool(args.save_tag_viz_video)
+            else None
+        )
+        if tag_viz_video_writer is not None:
+            print(f"[Tag Viz Video] Saving to: {args.tag_viz_video_path}")
         
-        max_ep_length = 1000  # Set a large limit for Python loop (C++ truncation is disabled)
+        max_ep_length = 1500  # Set a large limit for Python loop (C++ truncation is disabled)
         num_rollouts = 100
 
         for n_roll in range(num_rollouts):
@@ -897,29 +1161,67 @@ def main():
             done = np.array([False])
             ep_len = 0
             total_reward = 0
+            current_z = float("inf")
+            current_roll = 0.0
+            current_pitch = 0.0
 
             while not (done[0] or ep_len >= max_ep_length):
                 # policy inference
                 act, _ = model.predict(obs, deterministic=True)
-                print(f"step {ep_len:04d} | obs0={np.asarray(obs[0], dtype=np.float32)} | act0={act[0].tolist()}")
+                using_fallback = current_z <= float(args.fallback_start_z)
+                if using_fallback:
+                    act = build_fallback_upright_descent_action(
+                        env.action_space.shape[0],
+                        thrust_action=float(args.fallback_descent_thrust_action),
+                        roll=current_roll,
+                        pitch=current_pitch,
+                        attitude_gain=float(args.fallback_attitude_gain),
+                        omega_max_xy=fallback_omega_max_xy,
+                    )
+
+                print(
+                    f"step {ep_len:04d} | z={current_z:.3f} | "
+                    f"roll={current_roll:.3f} | pitch={current_pitch:.3f} | "
+                    f"fallback={int(using_fallback)} | "
+                    f"obs0={np.asarray(obs[0], dtype=np.float32)} | act0={act[0].tolist()}"
+                )
 
                 # env step
                 obs, reward, done, info = env.step(act)
+                if info and isinstance(info[0], dict):
+                    current_z = extract_extra_info_value(info[0], "drone_pos_z", current_z)
+                    current_roll = extract_extra_info_value(info[0], "drone_roll", current_roll)
+                    current_pitch = extract_extra_info_value(info[0], "drone_pitch", current_pitch)
                 total_reward += reward[0]
                 ep_len += 1
 
                 # ---- logging (policy obs shape: [1, 8]) ----
                 pixels.append(obs[0, 0:2].tolist())
                 actions.append(act[0].tolist())
+                if action_timeline_viz is not None:
+                    action_timeline_viz.update(act[0])
+                if body_rate_vector_viz is not None:
+                    body_rate_vector_viz.update(act[0])
 
                 if args.viz_scene:
                     raw_obs = get_raw_obs_from_vec_env(env)
                     if raw_obs is not None:
-                        show_combined_scene_from_raw(
+                        frame = show_combined_scene_from_raw(
                             raw_obs,
                             width=max(1, int(args.proj_img_width)),
                             height=max(1, int(args.proj_img_height)),
                         )
+                        if tag_viz_video_writer is not None:
+                            tag_viz_video_writer.write(frame)
+                elif tag_viz_video_writer is not None:
+                    raw_obs = get_raw_obs_from_vec_env(env)
+                    if raw_obs is not None:
+                        frame = render_tag_scene_from_raw(
+                            raw_obs,
+                            width=max(1, int(args.proj_img_width)),
+                            height=max(1, int(args.proj_img_height)),
+                        )
+                        tag_viz_video_writer.write(frame)
                 if args.save_obs_image:
                     raw_obs = get_raw_obs_from_vec_env(env)
                     if raw_obs is not None and (ep_len % max(1, int(args.obs_image_save_every)) == 0):
@@ -941,6 +1243,13 @@ def main():
                 env.disconnectUnity()
             except RuntimeError as e:
                 print(f"[Test] disconnectUnity warning: {e}")
+        if action_timeline_viz is not None:
+            action_timeline_viz.close()
+        if body_rate_vector_viz is not None:
+            body_rate_vector_viz.close()
+        if tag_viz_video_writer is not None:
+            tag_viz_video_writer.close()
+            print(f"[Tag Viz Video] Saved: {args.tag_viz_video_path}")
         if args.viz_scene:
             cv2.destroyAllWindows()
 

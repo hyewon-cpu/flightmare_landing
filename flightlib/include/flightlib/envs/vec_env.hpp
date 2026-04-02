@@ -46,6 +46,7 @@ class VecEnv {
   // control truncation
   void setTruncationEnabled(bool enabled); // hj added
   bool getTruncationEnabled(void) const; // hj added
+  void setLandingTerminalEnabled(bool enabled);
 
   // - auxiliary functions
   void isTerminalState(Ref<BoolVector<>> terminal_state);

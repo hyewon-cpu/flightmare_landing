@@ -31,7 +31,7 @@ class DotFlightEnvVec(VecEnv):
         self,
         impl,
         use_obs_norm: bool = True,
-        include_prev_action: bool = False,
+        include_prev_action: int = 0,
         stage_switch_enabled: bool = True,
         include_area_obs: bool = True,
         include_shape_obs: bool = True,
@@ -44,7 +44,7 @@ class DotFlightEnvVec(VecEnv):
         """
         self.wrapper = impl
         self.use_obs_norm = use_obs_norm
-        self.include_prev_action = bool(include_prev_action)
+        self.prev_action_history_len = max(0, int(include_prev_action))
         self.stage_switch_enabled = bool(stage_switch_enabled)
         self.include_area_obs = bool(include_area_obs)
         self.include_shape_obs = bool(include_shape_obs)
@@ -85,7 +85,8 @@ class DotFlightEnvVec(VecEnv):
             self._policy_num_dot_tags = 0
             self._policy_tag_feat_dim = self._dot_uv_dim
             self._policy_dot_uv_dim = self._dot_uv_dim
-        self._append_prev_action = self.include_prev_action and (not self._is_image_obs)
+        self._append_prev_action = self.prev_action_history_len > 0 and (not self._is_image_obs)
+        self._prev_action_obs_dim = self.prev_action_history_len * self.num_acts if self._append_prev_action else 0
 
         if self._is_image_obs and use_obs_norm:
             print("[FlightEnvVecSB3] image observation detected, disabling observation normalization.")
@@ -101,14 +102,14 @@ class DotFlightEnvVec(VecEnv):
             )
         elif self._is_dot_image_obs:
             # Policy sees all tag UV features when stage switching is enabled.
-            policy_dim = self._policy_dot_uv_dim + self._reward_obs_dim + (self.num_acts if self._append_prev_action else 0)
+            policy_dim = self._policy_dot_uv_dim + self._reward_obs_dim + self._prev_action_obs_dim
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
                 dtype=np.float32,
             )
         else:
-            policy_dim = self.num_obs + (self.num_acts if self._append_prev_action else 0)
+            policy_dim = self.num_obs + self._prev_action_obs_dim
             self._observation_space = spaces.Box(
                 low=-np.inf * np.ones(policy_dim, dtype=np.float32),
                 high=np.inf * np.ones(policy_dim, dtype=np.float32),
@@ -128,7 +129,9 @@ class DotFlightEnvVec(VecEnv):
         self._observation = np.zeros((self._num_envs, self.num_obs), dtype=np.float32)
         self._reward = np.zeros((self._num_envs,), dtype=np.float32)
         self._done = np.zeros((self._num_envs,), dtype=bool)
-        self._prev_actions = np.zeros((self._num_envs, self.num_acts), dtype=np.float32)
+        self._prev_actions = np.zeros(
+            (self._num_envs, self.prev_action_history_len, self.num_acts), dtype=np.float32
+        )
 
         self._extraInfo = np.zeros((self._num_envs, len(self._extraInfoNames)), dtype=np.float32)
 
@@ -139,14 +142,19 @@ class DotFlightEnvVec(VecEnv):
 
         # Observation normalization
         if self.use_obs_norm:
-            # Normalize only the observation features that are fed to policy.
-            if self._is_dot_image_obs:
-                rms_shape = (self._policy_dot_uv_dim,)
-            else:
-                rms_shape = (self.num_obs,)
+            self._fixed_dot_norm_dim = min(
+                self._policy_dot_uv_dim if self._is_dot_image_obs else 0,
+                int(self._observation_space.shape[0]) if len(self._observation_space.shape) > 0 else 0,
+            )
+            rms_tail_dim = max(0, int(self._observation_space.shape[0]) - self._fixed_dot_norm_dim)
+            rms_shape = (rms_tail_dim,)
             self.obs_rms = RunningMeanStd(shape=rms_shape)
             self.obs_rms_new = RunningMeanStd(shape=rms_shape)
         else:
+            self._fixed_dot_norm_dim = min(
+                self._policy_dot_uv_dim if self._is_dot_image_obs else 0,
+                int(self._observation_space.shape[0]) if len(self._observation_space.shape) > 0 else 0,
+            )
             self.obs_rms = None
             self.obs_rms_new = None
 
@@ -161,7 +169,7 @@ class DotFlightEnvVec(VecEnv):
             f"include_tag_id_obs={self.include_tag_id_obs}, "
             f"stage_switch_enabled={self.stage_switch_enabled}, "
             f"act_dim={self.num_acts}, use_obs_norm={self.use_obs_norm}, "
-            f"include_prev_action={self._append_prev_action}"
+            f"prev_action_history_len={self.prev_action_history_len}"
         )
 
     def seed(self, seed=0):
@@ -210,11 +218,12 @@ class DotFlightEnvVec(VecEnv):
         self._extraInfo[:] = 0.0
         # Flightmare fills the provided obs buffer
         self.wrapper.reset(self._observation)
-        # Update normalization statistics (if enabled)
+        policy_obs = self._format_obs(self._observation)
         if self.use_obs_norm:
-            self.obs_rms_new.update(self._policy_base_obs(self._observation))
-        # Return normalized observation (or raw if normalization disabled)
-        return self._format_obs(self.normalize_obs(self._observation))
+            rms_tail = self._policy_rms_tail(policy_obs)
+            if rms_tail.shape[1] > 0:
+                self.obs_rms_new.update(rms_tail)
+        return self.normalize_obs(policy_obs)
 
     # def reset_and_update_info(self):
     #     return self.reset(), self._update_epi_info()
@@ -294,10 +303,6 @@ class DotFlightEnvVec(VecEnv):
         # C++ fills buffers in-place
         self.wrapper.step(self._actions, self._observation, self._reward, self._done, self._extraInfo)
 
-        # Update normalization statistics (if enabled)
-        if self.use_obs_norm:
-            self.obs_rms_new.update(self._policy_base_obs(self._observation))
-
         # infos: extra_info만 넣어줌 (episode는 VecMonitor가 처리)
         if len(self._extraInfoNames) > 0:
             infos = [
@@ -308,14 +313,19 @@ class DotFlightEnvVec(VecEnv):
         else:
             infos = [{} for _ in range(self._num_envs)]
 
-        # Returned observation can include previous action (action from the just-finished step).
+        # Returned observation can include a configurable history of previous actions.
         if self._append_prev_action:
-            self._prev_actions = self._actions.copy().astype(np.float32)
+            self._prev_actions[:, 1:, :] = self._prev_actions[:, :-1, :]
+            self._prev_actions[:, 0, :] = self._actions.astype(np.float32)
             if np.any(self._done):
                 self._prev_actions[self._done] = 0.0
 
-        # Return normalized observation
-        obs = self._format_obs(self.normalize_obs(self._observation))
+        policy_obs = self._format_obs(self._observation)
+        if self.use_obs_norm:
+            rms_tail = self._policy_rms_tail(policy_obs)
+            if rms_tail.shape[1] > 0:
+                self.obs_rms_new.update(rms_tail)
+        obs = self.normalize_obs(policy_obs)
         rews = self._reward.copy()
         dones = self._done.copy()
 
@@ -431,12 +441,17 @@ class DotFlightEnvVec(VecEnv):
                 reward_obs = self._extraInfo[:, self._reward_obs_indices].astype(np.float32)
                 policy_obs = np.concatenate([policy_obs, reward_obs], axis=1).astype(np.float32)
             if self._append_prev_action:
-                policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+                policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
             return policy_obs
         policy_obs = obs.astype(np.float32)
         if self._append_prev_action:
-            policy_obs = np.concatenate([policy_obs, self._prev_actions], axis=1).astype(np.float32)
+            policy_obs = np.concatenate([policy_obs, self._flatten_prev_actions()], axis=1).astype(np.float32)
         return policy_obs
+
+    def _flatten_prev_actions(self) -> np.ndarray:
+        if not self._append_prev_action:
+            return np.zeros((self._num_envs, 0), dtype=np.float32)
+        return self._prev_actions.reshape(self._num_envs, self._prev_action_obs_dim).astype(np.float32)
 
     def _policy_base_obs(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -447,6 +462,13 @@ class DotFlightEnvVec(VecEnv):
         if self._is_dot_image_obs:
             return self._extract_policy_dot_obs(obs)
         return obs.astype(np.float32)
+
+    def _policy_rms_tail(self, obs: np.ndarray) -> np.ndarray:
+        if obs.ndim != 2:
+            raise ValueError(f"Expected batched policy obs with shape (n_envs, dim), got {obs.shape}")
+        if self._fixed_dot_norm_dim >= obs.shape[1]:
+            return np.zeros((obs.shape[0], 0), dtype=np.float32)
+        return obs[:, self._fixed_dot_norm_dim :].astype(np.float32)
 
     def _extract_policy_dot_obs(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -477,16 +499,20 @@ class DotFlightEnvVec(VecEnv):
         """
         if self._is_image_obs:
             return obs.astype(np.float32)
-        if self._is_dot_image_obs:
-            policy_obs = self._extract_policy_dot_obs(obs)
-            if not self.use_obs_norm:
-                return policy_obs
-            # Dot UV observations are image-plane pixel coordinates in [0, 83].
-            # Use fixed scaling for policy input normalization.
-            return (policy_obs / 83.0).astype(np.float32)
+        policy_obs = obs.astype(np.float32)
+        if policy_obs.ndim != 2:
+            raise ValueError(f"Expected batched obs with shape (n_envs, dim), got {policy_obs.shape}")
         if not self.use_obs_norm:
-            return obs.astype(np.float32)
-        return self._normalize_obs(obs, self.obs_rms).astype(np.float32)
+            return policy_obs.astype(np.float32)
+        normalized = policy_obs.copy()
+        fixed_dim = min(self._fixed_dot_norm_dim, policy_obs.shape[1])
+        if fixed_dim > 0:
+            normalized[:, :fixed_dim] = normalized[:, :fixed_dim] / 83.0
+        if self.obs_rms is not None and policy_obs.shape[1] > fixed_dim:
+            normalized[:, fixed_dim:] = self._normalize_obs(
+                policy_obs[:, fixed_dim:], self.obs_rms
+            ).astype(np.float32)
+        return normalized.astype(np.float32)
 
     def update_rms(self):
         """
